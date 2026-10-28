@@ -242,7 +242,9 @@ func (s *Service) buildInput(ctx context.Context, q db.Querier, c *rules, employ
 		in.OvertimeMinutes, in.RestDayMinutes, in.HolidayMinutes = ts.Totals.Overtime, ts.Totals.RestDay, ts.Totals.Holiday
 		in.OvertimePct, in.RestDayPct, in.HolidayPct = ts.Multipliers.Overtime, ts.Multipliers.RestDay, ts.Multipliers.Holiday
 	}
-	in.Items = []Item{} // advances, loans and bonuses: payroll items module
+	if in.Items, err = itemsFor(ctx, q, employeeID, start); err != nil {
+		return Input{}, Context{}, err
+	}
 
 	in.PrevCumMinWageTaxBase, err = c.minWageCumBefore(ctx, q, start)
 	return in, ic, err

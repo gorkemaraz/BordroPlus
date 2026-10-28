@@ -18,10 +18,12 @@ import (
 type Handler struct {
 	svc     *Service
 	workers int // parallel calculations in a period run
+	idem    func(http.Handler) http.Handler
 }
 
-func NewHandler(svc *Service, workers int) *Handler {
-	return &Handler{svc: svc, workers: max(1, workers)}
+// NewHandler: idem is the Idempotency-Key middleware for creating items.
+func NewHandler(svc *Service, workers int, idem func(http.Handler) http.Handler) *Handler {
+	return &Handler{svc: svc, workers: max(1, workers), idem: idem}
 }
 
 func (h *Handler) Routes(r chi.Router) {
@@ -39,6 +41,11 @@ func (h *Handler) Routes(r chi.Router) {
 	r.With(auth.Require(auth.PermPayrollCalculate)).Post("/payroll/employees/{id}/recalculate", httpx.Handle(h.recalculate))
 	r.Get("/payroll/employees/{id}/results", httpx.Handle(h.results))
 	r.Get("/payroll/employees/{id}/results/{period}", httpx.Handle(h.result))
+	r.Get("/payroll/employees/{id}/payslips/{period}", httpx.Handle(h.payslip))
+
+	r.With(need(auth.PermPayrollItemsManage)).Get("/payroll/items", httpx.Handle(h.listItems))
+	r.With(need(auth.PermPayrollItemsManage), h.idem).Post("/payroll/items", httpx.Handle(h.createItem))
+	r.With(need(auth.PermPayrollItemsManage)).Post("/payroll/items/{id}/cancel", httpx.Handle(h.cancelItem))
 }
 
 func pathID(r *http.Request) (int64, error) {
@@ -71,6 +78,12 @@ func mapErr(err error) error {
 		return httpx.NewError(http.StatusConflict, "invalid_transition", "dönem bu işlem için uygun durumda değil")
 	case errors.Is(err, ErrPreviousOpen):
 		return httpx.NewError(http.StatusConflict, "previous_period_open", "önceki bordro dönemi kapatılmadan bu dönem ilerletilemez")
+	case errors.Is(err, ErrDeductionCap):
+		return httpx.Validation(map[string]string{"amount": "aylık kesinti brüt maaşın dörtte birini aşamaz; taksit sayısını artırın"})
+	case errors.Is(err, ErrBadItem):
+		return httpx.NewError(http.StatusConflict, "invalid_state", "kalem zaten iptal edilmiş")
+	case errors.Is(err, ErrPayslipNotFinal):
+		return httpx.NewError(http.StatusNotFound, "payslip_not_final", "bu dönemin bordrosu henüz kesinleşmedi")
 	case errors.Is(err, ErrNotRun):
 		return httpx.NewError(http.StatusConflict, "not_calculated", "dönem hatasız hesaplanmadan kontrole gönderilemez")
 	case errors.Is(err, pgx.ErrNoRows):
