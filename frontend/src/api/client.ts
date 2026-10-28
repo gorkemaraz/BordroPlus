@@ -95,20 +95,36 @@ function toError(status: number, body: unknown): ApiError {
   return new ApiError(status, "http_" + status, `Sunucu hatası (${status})`);
 }
 
-/** Refresh the session once, however many callers ask at the same time. */
+let lastSession: Session | null = null;
+onSession((s) => {
+  lastSession = s;
+});
+
+/** Refresh the session once, however many callers ask at the same time.
+ *  Within a tab callers share one promise; across tabs a Web Lock serialises
+ *  refreshes, and a tab that waited reuses the token another tab obtained
+ *  instead of presenting the (now used) refresh token a second time. */
 export function refreshSession(): Promise<Session | null> {
   refreshing ??= (async () => {
-    try {
-      const res = await fetch("/api/v1/auth/refresh", { method: "POST", credentials: "same-origin" });
-      if (!res.ok) {
-        publish(null);
+    const stale = accessToken;
+    const doRefresh = async (): Promise<Session | null> => {
+      if (accessToken !== stale && lastSession) return lastSession; // another tab refreshed meanwhile
+      try {
+        const res = await fetch("/api/v1/auth/refresh", { method: "POST", credentials: "same-origin" });
+        if (!res.ok) {
+          publish(null);
+          return null;
+        }
+        const s = (await res.json()) as Session;
+        publish(s);
+        return s;
+      } catch {
         return null;
       }
-      const s = (await res.json()) as Session;
-      publish(s);
-      return s;
-    } catch {
-      return null;
+    };
+    try {
+      const locks = typeof navigator !== "undefined" ? navigator.locks : undefined;
+      return locks ? await locks.request("bordroplus-refresh", doRefresh) : await doRefresh();
     } finally {
       refreshing = null;
     }

@@ -132,10 +132,10 @@ Arayüz: http://localhost:3000. Giriş ekranındaki "Demo hesapları" bölümü 
 | 17 | muhasebe / denetci | Raporlar → Bordro özeti → CSV indir; İşveren maliyeti; İzin kullanımı; Fazla mesai | Birim toplamları (bireysel maaş yok); CSV Türkçe karakterlerle açılır |
 | 18 | denetci | Denetim kaydı → işlem: `payroll.close` | Kim, ne zaman, eski/yeni değer |
 | 19 | herhangi biri | Tarayıcıyı ~390 px genişliğe daraltın | Menü ☰ ile açılır; tablolar etiketli kartlara dönüşür; yatay kaydırma yok |
-| 20 | herhangi biri | İki sekmede aynı hesapla 15 dakikadan uzun kalın, sonra iki sekmede de işlem yapın | Oturum düşmez: refresh tek uçuşta yapılır ve sekmeler arasında paylaşılır |
+| 20 | herhangi biri | Aynı hesapla iki sekme açıp ikisini aynı anda yenileyin | İki sekmenin oturumu da açık kalır: refresh sekmeler arası kilitle tek seferde yapılır (`e2e/tabs.mjs`) |
 
 Bu senaryoların bir kısmı tarayıcıda otomatik de çalışır (Node gerekir):
 
 ```bash
-make e2e   # her rol × her sayfa × masaüstü/telefon (154 görünüm) + izin akışı (talep → onay → İK iptali)
+make e2e   # her rol × her sayfa × masaüstü/telefon (154 görünüm), izin akışı (talep → onay → İK iptali), iki sekmenin eşzamanlı yenilenmesi
 ```

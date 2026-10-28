@@ -40,7 +40,7 @@ Her kayıt: bağlam → karar → alternatifler → sonuçlar.
 
 **Alternatifler:** (1) Yalnızca sunucu taraflı oturum: her istekte oturum tablosu okunur. Bu tasarımda da hesap her istekte okunuyor, ama JWT ileride servisler arası doğrulamaya olanak bırakıyor. (2) Refresh token'ı `localStorage`'da tutmak: XSS ile çalınabilir. (3) Refresh token'ı JWT yapmak: iptal edilebilmesi için yine de veritabanında tutulması gerekir, opak token'a göre bir avantajı kalmaz.
 
-**Sonuçlar:** Çalınan bir refresh token'ın ilk kullanımı, meşru kullanıcının sonraki refresh isteğinde ortaya çıkar ve oturum sonlanır. Bilinen sınırlama: iki sekme aynı anda refresh yaparsa biri "yeniden kullanım" sayılır ve oturum düşer. Arayüz bunu önler: 401 alan istekler tek bir refresh'i bekler (single-flight) ve yeni token BroadcastChannel ile sekmeler arasında paylaşılır (`frontend/src/api/client.ts`). Aynı tarayıcıdaki sekmeler için çözülmüştür; farklı tarayıcılarda aynı oturum açılamayacağı için sorun oluşmaz.
+**Sonuçlar:** Çalınan bir refresh token'ın ilk kullanımı, meşru kullanıcının sonraki refresh isteğinde ortaya çıkar ve oturum sonlanır. Bilinen sınırlama: iki sekme aynı anda refresh yaparsa biri "yeniden kullanım" sayılır ve oturum düşer. Arayüz bunu önler: bir sekmedeki istekler tek bir refresh'i bekler (single-flight), sekmeler arasında refresh bir Web Lock ile sıraya girer, bekleyen sekme diğerinin aldığı token'ı (BroadcastChannel ile gelir) kullanır ve kullanılmış refresh token'ı ikinci kez sunmaz (`frontend/src/api/client.ts`). `e2e/tabs.mjs`, iki sekmenin aynı anda yenilenmesiyle bunu doğrular; kilit eklenmeden önce bu test ilk turda oturumu düşürüyordu.
 
 ## ADR-005: Rol değil izin kontrolü, matris kodda
 

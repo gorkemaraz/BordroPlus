@@ -6,7 +6,8 @@
   "scripts": {
     "smoke": "node smoke.mjs",
     "flow": "node flow.mjs",
-    "test": "node smoke.mjs && node flow.mjs"
+    "tabs": "node tabs.mjs",
+    "test": "node smoke.mjs && node flow.mjs && node tabs.mjs"
   },
   "dependencies": {
     "playwright": "1.52.0"

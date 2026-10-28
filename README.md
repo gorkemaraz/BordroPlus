@@ -86,7 +86,7 @@ React + Vite + TypeScript + TanStack Query, `nginx-unprivileged` ile servis edil
 - **Ekranlar:** panel (canlı sistem durumu), personel listesi ve kartı, organizasyon ağacı, izinler (bakiye, defter, talep, onay kuyruğu, vekâlet), puantaj (web saati, aylık ve haftalık döküm, gece vardiyası dağılımı, anomaliler, düzeltme kuyruğu, ay onayı), bordro (dönem iş akışı, çalışan bordrosu, kalemler), bordrolarım, raporlar ve denetim kaydı.
 - **Durumlar:** her veri görünümü ortak `Async` bileşeninden geçer; yükleniyor, boş ve hata durumları her ekranda aynıdır. Yetki hatası "yetkiniz yok" olarak, doğrulama hataları alan bazında gösterilir.
 - **Mobil:** 760 px altında menü açılır menüye, tablolar etiketli kartlara dönüşür; yatay kaydırma olmaz (`make e2e` ile 390 px'te denetlenir).
-- **Oturum:** access token yalnızca bellekte tutulur, refresh token `HttpOnly` cookie'dedir. 401 alan tüm istekler tek bir refresh'i bekler (single-flight) ve yeni token `BroadcastChannel` ile sekmeler arasında paylaşılır. Bu sayede iki sekme aynı refresh token'ı sunup birbirinin oturumunu düşürmez (ADR-004).
+- **Oturum:** access token yalnızca bellekte tutulur, refresh token `HttpOnly` cookie'dedir. 401 alan tüm istekler tek bir refresh'i bekler (single-flight); sekmeler arasında refresh bir Web Lock ile sıraya girer ve yeni token `BroadcastChannel` ile paylaşılır. Bu sayede iki sekme aynı refresh token'ı sunup birbirinin oturumunu düşürmez (ADR-004, `e2e/tabs.mjs`).
 - **Para gösterimi:** tutarlar API'den ondalık metin olarak gelir ve metinden biçimlenir (`45.000,50 ₺`); arayüzde para üzerinde aritmetik yapılmaz.
 - **Durum yönetimi:** idempotent POST'lar (çalışan, izin talebi, kalem) kullanıcı eylemi başına bir `Idempotency-Key` gönderir; çift tıklama çift kayıt üretmez.
 
