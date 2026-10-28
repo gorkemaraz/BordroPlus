@@ -21,10 +21,16 @@ func TestPayrollPermissions(t *testing.T) {
 		t.Fatalf("calculate: %d %v", status, res)
 	}
 
-	// The employee sees their own payslip, the manager does not see the team's.
-	if status, body := a.call(http.MethodGet, "/payroll/employees/"+emp+"/results/2026-01", worker, ""); status != 200 ||
+	// Drafts are not shown to the employee; payroll sees them.
+	if status, body := a.call(http.MethodGet, "/payroll/employees/"+emp+"/results/2026-01", worker, ""); status != 404 || errCode(body) != "payslip_not_final" {
+		t.Fatalf("own draft result: %d %v", status, body)
+	}
+	if status, body := a.call(http.MethodGet, "/payroll/employees/"+emp+"/results?year=2026", worker, ""); status != 200 || len(body["items"].([]any)) != 0 {
+		t.Fatalf("own draft list: %d %v", status, body)
+	}
+	if status, body := a.call(http.MethodGet, "/payroll/employees/"+emp+"/results/2026-01", payroll, ""); status != 200 ||
 		body["result"].(map[string]any)["net"] != "50931.18" {
-		t.Fatalf("own payslip: %d %v", status, body)
+		t.Fatalf("payroll reads draft: %d %v", status, body)
 	}
 	if status, _ := a.call(http.MethodGet, "/payroll/employees/"+emp+"/results?year=2026", mgr, ""); status != 403 {
 		t.Fatalf("manager reading team payroll: %d", status)

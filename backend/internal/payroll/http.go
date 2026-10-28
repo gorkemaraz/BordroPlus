@@ -176,6 +176,11 @@ func canRead(r *http.Request, employeeID int64) error {
 	return httpx.ErrForbidden
 }
 
+func readsAll(r *http.Request) bool {
+	p, _ := auth.FromContext(r.Context())
+	return p.Can(auth.PermPayrollReadAll)
+}
+
 func (h *Handler) ruleSets(w http.ResponseWriter, r *http.Request) error {
 	rows, err := h.svc.pool.Query(r.Context(), `SELECT lower(valid_during) FROM payroll_rule_sets ORDER BY lower(valid_during)`)
 	if err != nil {
@@ -260,9 +265,14 @@ func (h *Handler) results(w http.ResponseWriter, r *http.Request) error {
 			return httpx.Validation(map[string]string{"year": "2000-2100"})
 		}
 	}
+	// Employees reading their own pay see only final (approved or closed)
+	// months, as on the payslip; payroll.read.all sees drafts too.
 	rows, err := h.svc.pool.Query(r.Context(), `
-		SELECT period, result FROM payroll_results
-		 WHERE employee_id = $1 AND period >= make_date($2, 1, 1) AND period < make_date($2 + 1, 1, 1) ORDER BY period`, id, year)
+		SELECT r.period, r.result FROM payroll_results r
+		  LEFT JOIN payroll_periods p ON p.period = r.period
+		 WHERE r.employee_id = $1 AND r.period >= make_date($2, 1, 1) AND r.period < make_date($2 + 1, 1, 1)
+		   AND ($3 OR p.status IN ('approved', 'closed'))
+		 ORDER BY r.period`, id, year, readsAll(r))
 	if err != nil {
 		return err
 	}
@@ -294,6 +304,11 @@ func (h *Handler) result(w http.ResponseWriter, r *http.Request) error {
 	period, err := parsePeriod("period", chi.URLParam(r, "period"))
 	if err != nil {
 		return err
+	}
+	if !readsAll(r) {
+		if _, err := h.svc.GetPayslip(r.Context(), id, period, true); err != nil {
+			return mapErr(err)
+		}
 	}
 	res, in, err := h.svc.StoredResult(r.Context(), id, period)
 	if err != nil {
