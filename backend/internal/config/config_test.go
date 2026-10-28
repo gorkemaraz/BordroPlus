@@ -1,12 +1,19 @@
 package config
 
 import (
+	"strings"
 	"testing"
 	"time"
 )
 
-func TestLoadDefaultsAndOverrides(t *testing.T) {
+func setRequired(t *testing.T) {
 	t.Setenv("DATABASE_URL", "postgres://x")
+	t.Setenv("JWT_SECRET", strings.Repeat("s", MinJWTSecretLen))
+	t.Setenv("DEMO_PASSWORD", "Demo.12345")
+}
+
+func TestLoadDefaultsAndOverrides(t *testing.T) {
+	setRequired(t)
 	t.Setenv("HTTP_REQUEST_TIMEOUT", "7s")
 	t.Setenv("CORS_ORIGINS", "http://a, http://b ,")
 
@@ -30,5 +37,39 @@ func TestLoadRejectsInvalid(t *testing.T) {
 	t.Setenv("HTTP_REQUEST_TIMEOUT", "soon")
 	if _, err := Load(); err == nil {
 		t.Fatal("expected error for missing DATABASE_URL and bad duration")
+	}
+}
+
+func TestLoadAuthSettings(t *testing.T) {
+	setRequired(t)
+	t.Setenv("APP_ENV", "production")
+
+	c, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !c.CookieSecure {
+		t.Error("CookieSecure must default to true outside development")
+	}
+	if c.AccessTokenTTL != 15*time.Minute || c.MaxFailedLogins != 5 {
+		t.Errorf("defaults: ttl=%s maxFailures=%d", c.AccessTokenTTL, c.MaxFailedLogins)
+	}
+}
+
+func TestLoadRejectsWeakAuthSettings(t *testing.T) {
+	cases := map[string][2]string{
+		"short secret":        {"JWT_SECRET", "too-short"},
+		"refresh <= access":   {"REFRESH_TOKEN_TTL", "1m"},
+		"short demo password": {"DEMO_PASSWORD", "123"},
+		"bad bool":            {"COOKIE_SECURE", "maybe"},
+	}
+	for name, kv := range cases {
+		t.Run(name, func(t *testing.T) {
+			setRequired(t)
+			t.Setenv(kv[0], kv[1])
+			if _, err := Load(); err == nil {
+				t.Fatalf("expected error for %s=%s", kv[0], kv[1])
+			}
+		})
 	}
 }

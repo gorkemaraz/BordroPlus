@@ -53,7 +53,7 @@ func run() error {
 
 	srv := &http.Server{
 		Addr:              cfg.HTTPAddr,
-		Handler:           server.New(server.Deps{Config: cfg, Log: log, DB: pool, Version: version}),
+		Handler:           server.New(server.Deps{Config: cfg, Log: log, DB: pool, Pool: pool, Version: version}),
 		ReadHeaderTimeout: cfg.ReadHeaderTimeout,
 		ReadTimeout:       cfg.RequestTimeout,
 		WriteTimeout:      cfg.RequestTimeout + 5*time.Second,

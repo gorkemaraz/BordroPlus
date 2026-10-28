@@ -9,10 +9,13 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/collectors"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
+	"bordroplus/internal/audit"
+	"bordroplus/internal/auth"
 	"bordroplus/internal/config"
 	"bordroplus/internal/httpx"
 )
@@ -27,6 +30,9 @@ type Deps struct {
 	Log     *slog.Logger
 	DB      Pinger
 	Version string
+	// Pool backs the /api/v1 routes. When nil only the system endpoints are
+	// mounted, which lets their tests run without a database.
+	Pool *pgxpool.Pool
 }
 
 // New builds the root handler.
@@ -50,10 +56,30 @@ func New(d Deps) http.Handler {
 	r.Get("/health", healthHandler(d.DB, d.Version))
 	r.Handle("/metrics", promhttp.HandlerFor(reg, promhttp.HandlerOpts{Registry: reg}))
 
-	r.Route("/api/v1", func(api chi.Router) {
-		// Domain routes are mounted here in later stages.
-	})
+	if d.Pool != nil {
+		r.Route("/api/v1", func(api chi.Router) { mountAPI(api, d) })
+	}
 	return r
+}
+
+// mountAPI wires the versioned routes. Every route except login, refresh and
+// logout sits behind Authenticate and declares the permission it needs.
+func mountAPI(api chi.Router, d Deps) {
+	cfg := d.Config
+	tokens := auth.NewTokens(cfg.JWTSecret, cfg.AccessTokenTTL)
+	svc := auth.NewService(d.Pool, tokens, auth.Policy{
+		RefreshTTL:      cfg.RefreshTokenTTL,
+		MaxFailedLogins: cfg.MaxFailedLogins,
+		LockoutDuration: cfg.LockoutDuration,
+	})
+	authH := auth.NewHandler(svc, tokens, cfg.RefreshTokenTTL, cfg.CookieSecure)
+
+	api.Route("/auth", authH.Routes)
+
+	api.Group(func(p chi.Router) {
+		p.Use(authH.Authenticate)
+		p.With(auth.Require(auth.PermAuditRead)).Get("/audit-log", audit.ListHandler(d.Pool))
+	})
 }
 
 type healthResponse struct {

@@ -24,7 +24,22 @@ type Config struct {
 	ShutdownTimeout   time.Duration
 
 	CORSOrigins []string
+
+	// Authentication.
+	JWTSecret       []byte
+	AccessTokenTTL  time.Duration
+	RefreshTokenTTL time.Duration
+	CookieSecure    bool
+	MaxFailedLogins int
+	LockoutDuration time.Duration
+
+	// Demo seed (run by the migrate command).
+	SeedDemo     bool
+	DemoPassword string
 }
+
+// MinJWTSecretLen is the minimum HS256 key length in bytes.
+const MinJWTSecretLen = 32
 
 // Load reads the configuration and validates required values.
 func Load() (Config, error) {
@@ -40,12 +55,35 @@ func Load() (Config, error) {
 		ReadHeaderTimeout: dur("HTTP_READ_HEADER_TIMEOUT", 5*time.Second, &errs),
 		ShutdownTimeout:   dur("SHUTDOWN_TIMEOUT", 15*time.Second, &errs),
 		CORSOrigins:       list("CORS_ORIGINS"),
+
+		JWTSecret:       []byte(os.Getenv("JWT_SECRET")),
+		AccessTokenTTL:  dur("ACCESS_TOKEN_TTL", 15*time.Minute, &errs),
+		RefreshTokenTTL: dur("REFRESH_TOKEN_TTL", 7*24*time.Hour, &errs),
+		MaxFailedLogins: intVal("LOGIN_MAX_FAILURES", 5, &errs),
+		LockoutDuration: dur("LOGIN_LOCKOUT", 15*time.Minute, &errs),
+		SeedDemo:        boolVal("SEED_DEMO", true, &errs),
+		DemoPassword:    os.Getenv("DEMO_PASSWORD"),
 	}
+	// Browsers accept Secure cookies on http://localhost, but plain-HTTP
+	// deployments elsewhere would lose the refresh cookie; default on outside development.
+	c.CookieSecure = boolVal("COOKIE_SECURE", c.Env != "development", &errs)
 	if c.DatabaseURL == "" {
 		errs = append(errs, errors.New("DATABASE_URL is required"))
 	}
 	if c.DBMaxConns < 1 {
 		errs = append(errs, errors.New("DB_MAX_CONNS must be >= 1"))
+	}
+	if len(c.JWTSecret) < MinJWTSecretLen {
+		errs = append(errs, fmt.Errorf("JWT_SECRET must be at least %d bytes", MinJWTSecretLen))
+	}
+	if c.AccessTokenTTL <= 0 || c.RefreshTokenTTL <= c.AccessTokenTTL {
+		errs = append(errs, errors.New("token TTLs must satisfy 0 < ACCESS_TOKEN_TTL < REFRESH_TOKEN_TTL"))
+	}
+	if c.MaxFailedLogins < 1 {
+		errs = append(errs, errors.New("LOGIN_MAX_FAILURES must be >= 1"))
+	}
+	if c.SeedDemo && len(c.DemoPassword) < 8 {
+		errs = append(errs, errors.New("DEMO_PASSWORD must be at least 8 characters when SEED_DEMO is on"))
 	}
 	return c, errors.Join(errs...)
 }
@@ -68,6 +106,19 @@ func intVal(key string, def int, errs *[]error) int {
 		return def
 	}
 	return n
+}
+
+func boolVal(key string, def bool, errs *[]error) bool {
+	v, ok := os.LookupEnv(key)
+	if !ok || v == "" {
+		return def
+	}
+	b, err := strconv.ParseBool(v)
+	if err != nil {
+		*errs = append(*errs, fmt.Errorf("%s: %w", key, err))
+		return def
+	}
+	return b
 }
 
 func dur(key string, def time.Duration, errs *[]error) time.Duration {
