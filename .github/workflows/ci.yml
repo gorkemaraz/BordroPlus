@@ -43,7 +43,7 @@ jobs:
       - name: gofmt
         run: test -z "$(gofmt -l .)" || (gofmt -l . && exit 1)
       - name: Test (race + coverage)
-        run: go test -race -count=1 -coverprofile=coverage.out ./...
+        run: go test -race -count=1 -coverpkg=./internal/... -coverprofile=coverage.out ./...
       - name: Coverage report
         run: |
           go tool cover -func=coverage.out | tee coverage.txt
