@@ -526,3 +526,104 @@ Yarış durumu kanıtı: `TestConcurrentRefreshSingleWinner`. Aynı refresh toke
 ```bash
 cd backend && go test -run TestConcurrentRefreshSingleWinner -count=10 ./internal/auth/
 ```
+
+## Doğrulama Soruları
+
+### 1. En zorlandığın görev hangisiydi? Hangi alternatifleri düşündün ve neden eledin?
+
+**Bordro (T-3 ve T-4): kümülatif vergi ile kapalı dönem düzeltmesinin birlikte doğru çalışması.** Tek başına brütten nete hesap basit; zor olan, bir ayın vergisinin yılın önceki aylarına bağlı olması ve kapanmış bir ayın asla değişmemesinin gerekmesi.
+
+- **Aylık vergi:** İlk akla gelen, ayın matrahına "içinde bulunulan dilimin oranını" uygulamak. Bu, dilim geçişinde yanlış sonuç verir: Nisan'da 165.750 → 221.000 geçişinde iki farklı oran devreye girer. Bunun yerine `T(önceki kümülatif + matrah) − T(önceki kümülatif)` seçildi; T kesin tam sayı aritmetiğiyle hesaplanıp yalnızca fark bir kez yuvarlanıyor. Asgari ücret istisnası da aynı yöntemle, asgari ücretin kendi kümülatifi üzerinden hesaplanıyor. Doğruluk resmî rakamlarla teyit edildi: Temmuz 2026 istisnası 4.537,75 TL, yıllık toplam 57.881,23 TL.
+- **Kapalı döneme gelen düzeltme:** Üç seçenek düşünüldü. (a) Kapalı ayı yeniden hesaplayıp yeni sürüm olarak saklamak: ödenmiş ve bildirilmiş bordro değişmiş gibi görünür, kümülatif zincir karmaşıklaşır. (b) Düzeltmeyi elle girilen bir ek ödeme kalemine bırakmak: hataya açık ve izlenemez. (c) Seçilen yol: kapalı ay donar (veritabanı trigger'ı), açık dönemin hesabı sırasında kapanıştan sonra değişen kaynaklar taranır, kapalı ayın brütü bugünkü veriyle yeniden türetilir ve fark "Geçmiş dönem düzeltmesi" satırı olarak eklenir. `payroll_adjustments` tablosu farkın bir kez ödenmesini sağlar.
+- **Paralellik:** 1.500 çalışanı tek transaction'da sırayla hesaplamak basit ama yavaş olurdu. Seçilen tasarımda dönem satırı kilitlenir, çalışanlar 16 işçiye dağıtılır, her biri kendi transaction'ında hesaplanır. Sonuç 1.506 çalışan için yaklaşık 1 saniye.
+- **Hâlâ zorlayan nokta:** `make verify` ikinci kez çalıştırıldığında ortaya çıkan senaryo. Dönem kapandıktan sonra sisteme girilen ve işe girişi o aya düşen bir çalışan, sonraki bordroda hata veriyordu. Bu, testlerimin aklıma gelmeyen bir durumunu gösterdi (`TestBackdatedHireAfterClose`).
+
+### 2. Çözümünün kırıldığı ya da yetersiz kaldığı bir senaryo
+
+**Yıl ortasında başka bir işverenden gelen çalışan.** Sistem, aynı yıl içinde önceki işverende oluşmuş gelir vergisi matrahını bilmiyor; kümülatif matrah işe girdiği ay sıfırdan başlıyor. Örnek: Haziran'a kadar başka yerde 200.000 TL matrahla çalışmış biri, bizde Temmuz'da yeniden %15 diliminden vergilendirilir; oysa %20 dilimindedir. Bu durumda vergi eksik kesilir ve fark yıllık beyanla kapanmak zorunda kalır. Sebep veri modelinde: `prevCumTaxBase` yalnızca kendi `payroll_results` kayıtlarımızdan okunuyor. Çözüm, çalışan kartına "devreden kümülatif matrah" alanı ve bu değerin zincirin başlangıcına eklenmesi olurdu.
+
+Benzer bilinen sınırlamalar:
+- SGK tavanını aşan ek ödemenin sonraki iki aya devri uygulanmıyor.
+- Rapor günlerinde SGK'nın ödediği geçici iş göremezlik ödeneği modellenmiyor.
+- Onaylandıktan sonra eklenen bir resmî tatil, onaylı iznin düşülen gününü geriye dönük değiştirmiyor.
+- Puantaj önerileri vardiya planına değil, çalışanın geçmiş vardiyalarının medyanına dayanıyor.
+
+### 3. İki dizin: hangi sorgu için, dizinsiz/dizinli fark
+
+Ölçümler simülatör verisiyle (1,4 milyon basım) alındı; ayrıntılı planlar yukarıdaki "Dizinler" bölümünde.
+
+1. **`time_punches (employee_id, punched_at)`**: puantaj analizi; bir çalışanın bir aylık basımları. Dizinli 0,14 ms (index scan, 10 sayfa), dizinsiz 29,5 ms (paralel sıralı tarama, 14.599 sayfa). Yaklaşık 200 kat fark.
+2. **`time_punches (punched_at)`**: paneldeki "bugünkü basım" sayımı. Bu dizin tasarımda yoktu; k6 yük testi ortaya çıkardı. Dizinsiz 98,9 ms (her istekte 3 paralel süreçle 1,4 milyon satır), dizinli 0,29 ms (index-only scan). Etkisi yük altında çok daha büyüktü: veritabanı CPU'su %1.530'dan %630'a indi, sistem verimi 155'ten 3.507 istek/sn'ye (22 kat) çıktı, bakiye uç noktasının p95 değeri 309 ms'den 20,6 ms'ye düştü. Tek başına "yavaş" görünmeyen bir sorgunun eşzamanlı yük altında bütün sistemi boğabildiğini burada gördüm.
+
+### 4. Yapay zekâ kullanımı: reddedilen ya da düzeltilen bir çıktı
+
+Bu projede kod, SQL, test ve dokümanın büyük kısmı yapay zekâ (Claude) ile birlikte üretildi. Kabul ölçütü her zaman çalışan bir test ve mümkünse bağımsız bir kaynaktı. Örnekler:
+
+**a) Yanlış beklenen değer: asgari ücret istisnası, Temmuz 2026.** Testi yazarken elle hesaplanan beklenti şuydu:
+
+```go
+// Önce: (190.000 - 168.453) × 15% + 6.528,50 × 20% = 4.537,65   ← yanlış
+if ex[6] != 453765 { ... }
+```
+
+Test kırmızıya döndü; motor 4.537,75 hesaplıyordu. Aritmetiği yeniden yapınca 21.547 × %15 = 3.232,05 çıktı (3.231,95 değil). Resmî MUHSGK duyurusu da 4.537,75 TL diyordu. Testteki değer düzeltildi ve yıllık toplamı (57.881,23 TL) resmî rakamla karşılaştıran ek bir regresyon testi yazıldı:
+
+```go
+// Sonra: (190.000 - 168.453) × 15% + 6.528,50 × 20% = 3.232,05 + 1.305,70 = 4.537,75
+if ex[6] != 453775 { ... }
+```
+
+Ders: elle hesaplanan beklenti de "yapay zekâ çıktısı" kadar şüphelidir; ikisini bağımsız bir kaynağa karşı doğrulamak gerekir.
+
+**b) Reddedilen tasarım: üstel kümülatif zincir.** İlk sürümde `calculate` önce önceki ayın kümülatifini hesaplıyor, sonra girdileri kuruyordu. Maaş kaydı olmayan aylarda hata yolunda zincir baştan yeniden hesaplanıyordu; iş ay sayısıyla üstel büyüyordu. Testin 3,8 sn sürmesinden fark edildi. Girdiler önce kurulacak şekilde düzeltildi (0,48 sn) ve dönem özeti değişmediği için sonucun aynı kaldığı doğrulandı.
+
+**c) Testi geçen ama gerçekte kırık olan kod: sekmeler arası oturum yenileme.** İlk istemci kodu, refresh'i yalnızca tek sekme içinde tek uçuşa indiriyordu. Bu, ADR-004'teki iki sekme sorununu çözüyormuş gibi görünüyordu. Bunu sınayan tarayıcı testi (`e2e/tabs.mjs`) ilk turda oturumu düşürdü; çözüm sekmeler arası bir Web Lock oldu.
+
+### 5. "Yıllık izin hakediş motoru" (T-1) doğruluğunun kanıtı
+
+Üç katmanda kanıtlandı.
+
+**Saf kurallar (tablo testleri):**
+- 4857/53 bantları: 5. yıl 14 gün, 6. yıl 20 gün, 15. yıl 26 gün
+- 18 yaş ve altı ile 50 yaş ve üstü için 20 gün tabanı
+- 29 Şubat'ta işe giriş
+- İşten çıkışta hakedişin durması
+- Hafta sonu, resmî tatil, arife, yarım gün ve rapor iadesi
+
+**Gerçek veritabanında senaryolar:**
+- Demo çalışanların bakiyeleri elle hesaplanan değerle karşılaştırıldı: D0001 = 20 (18 yaşında) + 14 = 34 gün; D0004'ün 50 yaşına girdiği yıllar 20 gün.
+- Rapor iadesi, izin ve rapordan hangisi önce onaylanırsa onaylansın aynı sonucu veriyor.
+- Her testin sonunda tüm hesaplar için "bakiye = defter toplamı ve ≥ 0" koşulu kontrol ediliyor.
+
+**Yarış durumu:** 34 gün bakiyeye 10'ar günlük 5 talep aynı anda onaylanıyor. Her seferinde tam 3 onay çıkıyor ve bakiye 4 günde kalıyor. Veritabanındaki `CHECK (balance >= 0)` ikinci güvence.
+
+```bash
+make testdb-up
+cd backend && go test -v ./internal/leave/
+```
+
+```
+--- PASS: TestEntitlementBands (0.00s)
+--- PASS: TestAccrualsFollowAnniversaries (0.00s)
+--- PASS: TestAccrualsAgeFloorChangesYearByYear (0.00s)
+--- PASS: TestAccrualsStopAtTermination (0.00s)
+--- PASS: TestLeapDayHire (0.00s)
+--- PASS: TestWorkingHalfDays (0.00s)
+--- PASS: TestSickRefund (0.00s)
+--- PASS: TestDays (0.00s)
+--- PASS: TestDemoBalances (0.51s)
+--- PASS: TestAnnualLeaveLifecycle (0.52s)
+--- PASS: TestConcurrentApprovalsNeverOverdraw (0.55s)
+--- PASS: TestBalanceCannotGoNegativeInDatabase (0.44s)
+--- PASS: TestSickReportDuringLeaveIsRefunded (0.58s)
+--- PASS: TestHalfDaysHolidaysAndOverlaps (0.52s)
+PASS
+ok  	bordroplus/internal/leave	4.177s
+```
+
+```bash
+go test -run TestConcurrentApprovalsNeverOverdraw -count=10 ./internal/leave/
+ok  	bordroplus/internal/leave	6.506s
+```
+
+Ayrıca çalışan sistem üzerinde `make verify` içindeki T-1 kontrolü API'den uçtan uca geçer: hakediş = motorun hesabı, eşzamanlı iki onay, bakiyeyi aşan talebe `409 insufficient_balance`, rapor iadesi ve yarım gün.
