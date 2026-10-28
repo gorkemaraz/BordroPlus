@@ -235,6 +235,71 @@ go test -v ./internal/timesheet/      # motor tabloları + öneri/onay/ay kapan�
 go test -v -run 'Timesheet|WebClock' ./internal/server/
 ```
 
+## Bordro Hesaplama Motoru (T-3)
+
+| Uç nokta | İzin | Açıklama |
+|---|---|---|
+| `GET /api/v1/payroll/rule-sets` | `payroll.read.all` | Zaman geçerlilikli parametre setleri |
+| `POST /api/v1/payroll/employees/{id}/calculate` | `payroll.calculate` | `{"period":"2026-03"}`; yılın eksik önceki aylarını da hesaplar |
+| `POST /api/v1/payroll/employees/{id}/recalculate` | `payroll.calculate` | `{"from":"2026-03"}`; o aydan yılın son hesaplanan ayına kadar, ay ay önce/sonra farkı döner |
+| `GET /api/v1/payroll/employees/{id}/results?year=` | `payroll.read.all` veya kendisi | Aylık özet |
+| `GET /api/v1/payroll/employees/{id}/results/{YYYY-MM}` | `payroll.read.all` veya kendisi | Satır satır açıklamalı bordro ve hesabın girdileri |
+
+Yönetici, ekibinin bordrosunu göremez. Tutarlar API'de her zaman ondalık metin olarak döner (`"50931.18"`).
+
+**Parametreler** (`payroll_rule_sets`, dönem başına göre seçilir; çakışan geçerlilik aralıkları `EXCLUDE` kısıtıyla engellenir):
+
+| | TR-2025.1 | TR-2026.1 |
+|---|---|---|
+| Brüt asgari ücret | 26.005,50 | 33.030,00 |
+| SGK taban / tavan | 26.005,50 / 195.041,25 (7,5 kat) | 33.030,00 / 297.270,00 (9 kat, 7566 s.K.) |
+| SGK işçi + işsizlik işçi | %14 + %1 | %14 + %1 |
+| SGK işveren (indirim) + işsizlik işveren | %20,75 (−4 puan) + %2 | %21,75 (−2 puan) + %2 |
+| Damga vergisi | %0,759 | %0,759 |
+| Ücret gelirleri tarifesi | 158.000 / 330.000 / 1.200.000 / 4.300.000 (GVGT 329) | 190.000 / 400.000 / 1.500.000 / 5.300.000 (GVGT 332) |
+
+İşveren indirimi 5510 s.K. md. 81/(ı) kapsamında, imalat dışı sektör için uygulanmıştır. Yıl ortasında bir parametre değişirse (örneğin asgari ücret ara zammı) yeni bir satır eklenir; motor her ay için o ay geçerli olan seti kullanır.
+
+**Hesap sırası** (`internal/payroll/engine.go`):
+
+1. **Brüt:** temel ücret + fazla mesai + hafta tatili + resmî tatil + vergiye/SGK'ya tabi ek ödemeler. Saatlik ücret aylık ücret ÷ 225'tir. Resmî tatil çalışmasında aylık ücret tatil gününü zaten ödediği için yalnızca %100 ek ödenir.
+2. **SGK matrahı:** SGK'ya tabi brüt, gün sayısına oranlanmış taban ile tavan arasına sıkıştırılır. İşçi payı %14, işsizlik işçi payı %1.
+3. **Gelir vergisi matrahı:** vergiye tabi brüt − SGK işçi − işsizlik işçi. Bu ayın vergisi `T(önceki kümülatif + matrah) − T(önceki kümülatif)` olarak hesaplanır. T yıllık tarifeyi tam sayı aritmetiğiyle ve yuvarlamadan uygular; yuvarlama farka yalnızca bir kez yapılır.
+4. **Asgari ücret istisnası (GVK 23/18):** asgari ücretin kendi kümülatif matrahı üzerinden aynı yöntemle hesaplanan vergi kadar; hesaplanan vergiyi geçemez. Asgari ücretin kümülatif matrahı kişiye değil yıla bağlıdır.
+5. **Damga vergisi:** brüt × %0,759, eksi asgari ücretin damga vergisi.
+6. **Net:** brüt − SGK işçi − işsizlik işçi − gelir vergisi − damga vergisi − netten kesintiler (avans, borç taksiti).
+7. **İşveren maliyeti:** brüt + SGK işveren (indirim düşülmüş) + işsizlik işveren.
+
+**Yuvarlama kuralı:** tüm tutarlar tam sayı kuruştur, oranlar 1/100.000 birimidir; float kullanılmaz. Her kalem bir kez, kuruşa yarım-yukarı yuvarlanır. Toplamlar yuvarlanmış kalemlerin toplamıdır. Bordronun her satırı kendi formülünü taşır (`"140000.00 × %14"`).
+
+**Girdiler** (`internal/payroll/service.go`):
+
+- **Temel ücret, 30 gün kuralıyla:** tam ayda aylık ücret ödenir; ay içinde zam olursa günlere göre ağırlıklandırılır. Kısmi ayda çalışılan her gün için aylık ÷ 30 ödenir. Onaylı ücretsiz izin günleri ücretten ve SGK gününden düşülür.
+- **Fazla mesai:** yalnızca **onaylanmış (dondurulmuş) puantaj ayından** gelir. Puantaj onaylanmamışsa fazla mesai bordroya girmez ve bu durum bordro notunda belirtilir.
+- **Kümülatif matrah:** yılın önceki ayının kayıtlı sonucundan alınır. Önceki ay eksikse önce o hesaplanır. İlk maaş kaydından önceki aylar (sisteme geçiş öncesi) bordro dışı sayılır.
+
+**Geçmiş ay düzeltmesi:** Haziran'da Mart'tan geçerli bir zam girilirse `recalculate {"from":"2026-03"}` Mart'tan Haziran'a kadar her ayı sırayla yeniden hesaplar. Böylece Nisan–Haziran'ın kümülatif matrahı ve dilimi düzelir. Girdisi değişmeyen ay olduğu gibi kalır. Aynı kural seti sürümüyle tekrar çalıştırıldığında hiçbir şey değişmez (`input_hash`). Kapanmış dönemlerin değişmemesi ve farkın sonraki bordroya "geçmiş dönem düzeltmesi" olarak yansıması iş akışı aşamasının (T-4) konusudur.
+
+**Doğrulama:** Motor, yayımlanmış resmî rakamlarla regresyon testine bağlıdır:
+
+| Test | Beklenen (yayımlanan) |
+|---|---|
+| 2026 asgari ücret neti / işveren maliyeti (imalat dışı) | 28.075,50 / 40.214,03 |
+| 2025 asgari ücret neti | 22.104,67 |
+| 2026 asgari ücret GV istisnası Ocak–Haziran / Temmuz | 4.211,33 / 4.537,75 |
+| 2026 yıllık asgari ücret GV istisnası | 57.881,23 |
+| 2026 asgari ücret DV istisnası | 250,70 |
+
+```bash
+cd backend && go test -v ./internal/payroll/
+```
+
+**Bilinen sınırlamalar:**
+- Aynı yıl içinde önceki işverende oluşan kümülatif matrah sisteme girilemiyor.
+- SGK tavanını aşan ek ödemenin sonraki iki aya devri (devreden tavan) uygulanmıyor.
+- Rapor günlerinde SGK'nın ödediği geçici iş göremezlik ödeneği modellenmiyor; rapor günleri işveren tarafından ücretli sayılıyor.
+- Engellilik indirimi uygulanmıyor.
+
 ## Testler
 
 ```bash

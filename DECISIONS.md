@@ -101,3 +101,13 @@ Her kayıt: bağlam → karar → alternatifler → sonuçlar.
 **Alternatifler:** (1) Oturumları ayrı bir tabloda kalıcı tutmak: her basım ve her düzeltmede yeniden eşleştirme ve tutarlılık sorunu doğar. (2) Basımı yerinde düzeltmek: denetim izi kaybolur ve "onaysız değiştirmeme" kuralı ihlal edilir. (3) Haftayı takvim ayına göre bölmek: 45 saat kuralı iki aya parçalanır ve fazla mesai yanlış hesaplanır.
 
 **Sonuçlar:** Kural değişikliği ya da onaylı düzeltme anında yansır ve geçmiş yeniden üretilebilir; donmuş aylar ise değişmez. Okuma işlemi öneri tablosuna yazar; bu idempotent olduğu için kabul edildi. Maliyet, okunan aralığın her istekte yeniden eşleştirilmesidir. Bu da çalışan başına günde birkaç basım için önemsizdir (62 günlük sınır var). Bilinen sınırlama: vardiya planı tutulmuyor; öneriler planlanan vardiya yerine tarihsel medyana dayanıyor.
+
+## ADR-011: Bordro motoru saf fonksiyon; tam sayı kuruş, kümülatif vergi tek yuvarlama ile
+
+**Bağlam:** Bir kuruşluk fark hukuki sorundur. Hesap yeniden üretilebilir ve açıklanabilir olmalı. Oranlar ve tavanlar yıl içinde değişebilir. Geçmiş bir aydaki düzeltme, sonraki ayların kümülatif matrahını değiştirmelidir.
+
+**Karar:** `payroll.Calculate(RuleSet, Input) Result` veritabanına dokunmayan, deterministik bir fonksiyondur. Tutarlar `int64` kuruş, oranlar 1/100.000 birimindedir. Her kalem kuruşa bir kez yarım-yukarı yuvarlanır. Aylık gelir vergisi, yıllık tarifenin kesin değerleri üzerinden `T(kümülatif) − T(önceki kümülatif)` olarak hesaplanır ve yalnızca bu fark yuvarlanır. Parametreler `payroll_rule_sets` tablosunda geçerlilik aralığıyla tutulur. Her sonuç girdileriyle, kural seti sürümüyle ve girdi özetiyle (`input_hash`) birlikte saklanır. Bir düzeltme, düzeltilen aydan yılın sonuna kadar sırayla yeniden hesaplanır.
+
+**Alternatifler:** (1) `numeric` ile SQL'de hesap: yuvarlama noktaları dağınık olur ve test etmek zorlaşır. (2) `float64`: 0,1 + 0,2 sorunu, kuruş farkları. (3) Aylık vergiyi o ayın matrahına uygulanan dilim oranıyla hesaplamak: dilim geçişinde yanlış sonuç verir. (4) Parametreleri koda gömmek: yıl ortası değişiklik deploy gerektirir ve geçmiş ayların hangi kurallarla hesaplandığı izlenemez.
+
+**Sonuçlar:** Motor, yayımlanmış resmî rakamlarla (asgari ücret neti, aylık istisna tutarları, yıllık toplam) birebir doğrulanabildi. Aynı girdi her zaman aynı sonucu verir; bu, 1.500 çalışanın paralel hesabını (T-4) güvenli kılar. Bunun bedeli olarak her satırın formül metniyle birlikte saklanması sonuç JSON'unu büyütür, ancak bu bilinçli bir tercihtir: bordro sonradan açıklanabilir olmalı.
