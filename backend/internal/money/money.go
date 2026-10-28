@@ -65,3 +65,20 @@ func digits(s string) bool {
 	}
 	return true
 }
+
+// MarshalJSON writes the amount as a decimal string ("45000.50") so clients
+// never handle kuruş integers or binary floats.
+func (k Kurus) MarshalJSON() ([]byte, error) { return []byte(`"` + k.String() + `"`), nil }
+
+// UnmarshalJSON accepts the decimal string form.
+func (k *Kurus) UnmarshalJSON(b []byte) error {
+	if len(b) < 2 || b[0] != '"' || b[len(b)-1] != '"' {
+		return ErrInvalid
+	}
+	v, err := Parse(string(b[1 : len(b)-1]))
+	if err != nil {
+		return err
+	}
+	*k = v
+	return nil
+}

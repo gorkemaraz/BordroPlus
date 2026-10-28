@@ -1,6 +1,9 @@
 package money
 
-import "testing"
+import (
+	"encoding/json"
+	"testing"
+)
 
 func TestParseAndFormat(t *testing.T) {
 	ok := map[string]Kurus{
@@ -26,5 +29,24 @@ func TestParseAndFormat(t *testing.T) {
 		if got := k.String(); got != want {
 			t.Errorf("%d.String() = %q, want %q", k, got, want)
 		}
+	}
+}
+
+func TestJSONRoundTrip(t *testing.T) {
+	type row struct {
+		A Kurus  `json:"a"`
+		B *Kurus `json:"b"`
+	}
+	b := Kurus(-710)
+	out, err := json.Marshal(row{A: 4_500_050, B: &b})
+	if err != nil || string(out) != `{"a":"45000.50","b":"-7.10"}` {
+		t.Fatalf("marshal: %s %v", out, err)
+	}
+	var back row
+	if err := json.Unmarshal(out, &back); err != nil || back.A != 4_500_050 || *back.B != -710 {
+		t.Fatalf("unmarshal: %+v %v", back, err)
+	}
+	if err := json.Unmarshal([]byte(`{"a":4500050}`), &back); err == nil {
+		t.Fatal("bare numbers must be rejected")
 	}
 }
