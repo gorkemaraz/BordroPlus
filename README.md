@@ -32,6 +32,21 @@ Faydalı komutlar (`make help`):
 | `make cover` | Go kapsam raporu |
 | `make clean` | Yığını durdurur ve veritabanı hacmini siler |
 
+### Demo hesapları
+
+Migrate servisi ilk açılışta her rol için bir hesap oluşturur. Parola `.env` içindeki `DEMO_PASSWORD` değeridir (varsayılan: `Demo.2026!`).
+
+| Rol | E-posta | Kişi (kurgusal) | Birim |
+|---|---|---|---|
+| Çalışan | `calisan@bordroplus.test` | Can Demir | Yazılım Geliştirme |
+| Yönetici | `yonetici@bordroplus.test` | Elif Kaya | Bilgi Teknolojileri (birim yöneticisi) |
+| İK uzmanı | `ik@bordroplus.test` | Selin Arslan | İnsan Kaynakları |
+| Bordro uzmanı | `bordro@bordroplus.test` | Burak Şahin | Bordro |
+| Muhasebe | `muhasebe@bordroplus.test` | Deniz Aydın | Muhasebe |
+| Denetçi | `denetci@bordroplus.test` | Ece Koç | İç Denetim |
+
+Seed idempotenttir: her açılışta yalnızca eksik kayıtları ekler, değiştirilmiş parolalara dokunmaz.
+
 ## Mimari Özeti
 
 ```
@@ -58,3 +73,55 @@ Tüm imajlar çok aşamalı derlenir ve root olmayan kullanıcıyla çalışır 
 | Frontend | React + Vite + TS + TanStack Query | Rol bazlı çok ekranlı panel için olgun ekosistem. Yükleniyor/boş/hata durumlarını TanStack Query standart biçimde verir. Vite hızlı derler ve çıktı nginx ile statik servis edilir |
 
 Ayrıntılı karar kayıtları: [DECISIONS.md](DECISIONS.md)
+
+## Kimlik Doğrulama ve Yetki
+
+| Uç nokta | Açıklama |
+|---|---|
+| `POST /api/v1/auth/login` | `{"email","password"}` → access token (gövdede) + refresh token (cookie) |
+| `POST /api/v1/auth/refresh` | Refresh cookie'sini döndürür (rotation), yeni access token verir |
+| `POST /api/v1/auth/logout` | Refresh token ailesini iptal eder, cookie'yi siler |
+| `GET /api/v1/auth/me` | Oturumdaki kullanıcı, rolü ve izin listesi |
+| `GET /api/v1/audit-log` | Denetim kaydı, yalnızca denetçi; `?limit=&cursor=&entity_type=&entity_id=&actor_user_id=&action=` |
+
+- **Parola:** argon2id (19 MiB, 2 tur, 1 iş parçacığı; OWASP profili), PHC biçiminde saklanır. Veritabanı `CHECK` kısıtı argon2id dışındaki özetleri reddeder.
+- **Access token:** 15 dakikalık HS256 JWT. Algoritma, issuer ve son kullanma tarihi zorunlu tutulur; `alg=none` reddedilir.
+- **Refresh token:** rastgele 256 bit, veritabanında yalnızca SHA-256 özeti saklanır. Her kullanımda yenisiyle değiştirilir. Kullanılmış bir token tekrar gelirse çalınmış sayılır ve tüm token ailesi iptal edilir. Token, `/api/v1/auth` yoluyla sınırlı `HttpOnly` + `SameSite=Strict` bir cookie'de taşınır.
+- **Kaba kuvvet koruması:** art arda 5 hatalı denemeden sonra hesap 15 dakika kilitlenir. Yanlış parola, bilinmeyen e-posta, kilitli ve pasif hesap aynı 401 yanıtını alır; bilinmeyen e-postada da sahte bir özet doğrulanır, böylece yanıt süresi hesabın var olup olmadığını ele vermez.
+- **Yetki:** her istekte hesap veritabanından yeniden okunur; pasifleştirme ve rol değişikliği token süresi dolmadan hemen etkili olur. Uç noktalar rol yerine izin (`audit.read`, `payroll.approve` …) ister. Kimlik yoksa 401, izin yoksa 403 döner.
+- **Denetim kaydı:** giriş, hatalı giriş, çıkış, refresh token yeniden kullanımı ve seed işlemleri `audit_log` tablosuna yazılır. Tablo eklemeli-yalnızdır: `UPDATE`, `DELETE` ve `TRUNCATE` trigger tarafından reddedilir.
+
+### Yetki matrisi
+
+`.self` kendi kaydı, `.team` yöneticinin organizasyon alt ağacı, `.all` tüm şirket demektir. Matrisin tek kaynağı `backend/internal/auth/rbac.go` dosyasıdır ve birim testleriyle korunur.
+
+| İzin | Çalışan | Yönetici | İK | Bordro | Muhasebe | Denetçi |
+|---|:-:|:-:|:-:|:-:|:-:|:-:|
+| Kendi kartı, izin talebi, puantajı, bordrosu | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Ekip izin/puantaj görme ve onaylama | | ✓ | | | | |
+| Tüm çalışanları görme | | | ✓ | ✓ | ✓ | ✓ |
+| Çalışan ve organizasyon düzenleme | | | ✓ | | | |
+| İzin/puantaj yönetimi (tüm şirket) | | | ✓ | | | |
+| Maaşı açık görme | | | ✓ | ✓ | | |
+| Bordro hesaplama, ek kalemler | | | | ✓ | | |
+| Bordro onayı ve dönem kapanışı | | | | | ✓ | |
+| Raporlar | | | ✓ | ✓ | ✓ | ✓ |
+| Denetim kaydı | | | | | | ✓ |
+
+Görevler ayrılığı: bordroyu hesaplayan rol onaylayamaz ve dönemi kapatamaz. Bu kural bir testle güvence altındadır.
+
+## Testler
+
+```bash
+make testdb-up   # 127.0.0.1:55432 üzerinde geçici PostgreSQL 16
+make test        # Go testleri + frontend tip kontrolü
+make testdb-down
+```
+
+Veritabanı testleri sahte nesne (mock) kullanmaz. Her test, gerçek PostgreSQL üzerinde rastgele adlı yeni bir veritabanı açar, tüm migrasyonları uygular ve test bitince veritabanını siler. `TEST_DATABASE_URL` tanımlı değilse bu testler atlanır. CI'da GitHub Actions bir Postgres servisi başlatır ve testleri `-race` ile çalıştırır.
+
+Yarış durumu kanıtı: `TestConcurrentRefreshSingleWinner`. Aynı refresh token'ı 10 goroutine aynı anda kullanır; yalnızca biri başarılı olur ve token ailesi iptal edilir.
+
+```bash
+cd backend && go test -run TestConcurrentRefreshSingleWinner -count=10 ./internal/auth/
+```
