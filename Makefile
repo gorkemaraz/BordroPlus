@@ -1,7 +1,7 @@
 # BordroPlus developer commands. Requires Docker (compose v2), Go and Node for local work.
 COMPOSE ?= docker compose
 
-.PHONY: help up down logs ps build test test-backend test-frontend lint cover clean testdb-up testdb-down verify reset-demo e2e
+.PHONY: help up down logs ps build test test-backend test-frontend lint cover clean testdb-up testdb-down verify reset-demo e2e load
 
 # Integration tests run against a throwaway Postgres (see testdb-up). Unset
 # TEST_DATABASE_URL to run unit tests only; DB tests are then skipped.
@@ -61,6 +61,9 @@ verify: .env ## End-to-end PASS/FAIL table for every feature and task (stack mus
 
 e2e: ## Browser tests (every page per role, desktop and phone; a leave flow) against the running stack
 	cd e2e && npm ci --no-audit --no-fund && npx playwright install chromium && npm test
+
+load: .env ## k6 load test (90 s, up to 50 users + logins) with p50/p95/p99 per endpoint
+	$(COMPOSE) --profile load run --rm k6
 
 reset-demo: .env ## Drop all data and start again from the initial seed (same simulator seed, same data)
 	$(COMPOSE) down -v --remove-orphans

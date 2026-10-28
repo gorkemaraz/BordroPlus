@@ -451,7 +451,37 @@ Bu tabloda fark yaklaşık 9 kat ve mutlak süreler küçük. Ancak dizin sıral
 
 **3. `org_units USING gist (path)`:** yönetici alt ağacı. `org_units` 22 satırlık bir tablo olduğu için planlayıcı doğru şekilde sıralı taramayı seçiyor (0,34 ms; çalışanlar `employees_org_unit_idx` ile birleştiriliyor). Sıralı tarama kapatıldığında `Index Scan using org_units_path_gist … Index Cond: (path <@ 'genel_mudurluk.operasyon')` planı görülüyor. Bu dizin, ağaç binlerce birime büyüdüğünde devreye girmek üzere orada.
 
+**4. `time_punches (punched_at)`:** paneldeki "bugünkü basım" sayımı. Bu dizin yük testinin bulduğu darboğaz üzerine eklendi (bkz. Yük Testi): sorgu 98,9 ms'den (paralel sıralı tarama, 1,4 milyon satır) 0,29 ms'ye (index-only scan) indi.
+
 Diğer kritik dizinler: `leave_ledger (employee_id, effective_date, id)` (bakiye özeti 0,07 ms), `payroll_results (employee_id, period)` (benzersiz; kümülatif matrah zinciri), kısmi `punch_corrections (employee_id, work_date) WHERE status = 'proposed'` (onay kuyruğu) ve `idempotency_keys (user_id, key)`.
+
+## Yük Testi (k6)
+
+```bash
+make load    # compose ağında grafana/k6; 90 sn, 50 eşzamanlı kullanıcıya rampa + saniyede 5 giriş
+```
+
+Senaryo (`load/load.js`): kullanıcılar hiç beklemeden (stres) ardı ardına istek atar. Trafik karışımı şöyledir:
+- yönetici kapsamında çalışan listesi (ltree alt ağacı)
+- rastgele bir simülatör çalışanının izin bakiyesi
+- puantaj ay özeti (≈45 günlük basımın eşleştirilmesi)
+- bordro sonuçları
+- onay kuyruğu ve sistem durumu
+- bunlara ek olarak saniyede 5 giriş (argon2id, CPU yoğun)
+
+Veri: simülatörün 1.500 çalışanı ve 1,4 milyon basımı. Ortam: yerel Docker Desktop (16 çekirdek), tüm servisler aynı makinede.
+
+| Uç nokta | p50 (ms) | p95 (ms) | p99 (ms) | maks (ms) |
+|---|---:|---:|---:|---:|
+| Çalışan listesi (yönetici kapsamı) | 7,6 | 12,9 | 15,6 | 30,2 |
+| İzin bakiyesi | 13,3 | 20,6 | 24,1 | 40,6 |
+| Puantaj ay özeti | 11,5 | 18,9 | 22,4 | 37,3 |
+| Bordro sonuçları | 5,6 | 10,4 | 12,8 | 32,1 |
+| Giriş (argon2id) | 102,7 | 116,3 | 125,4 | 142,6 |
+
+**Toplam 316.143 istek, 3.507 istek/sn, hata oranı %0,00.** Eşikler (p95 < 300/500/800 ms, hata < %1) `make load`'un çıkış koduna bağlıdır.
+
+**Ölçümün bulduğu darboğaz:** İlk koşuda verim yalnızca 155 istek/sn idi ve izin bakiyesinin p95 değeri 309 ms ile eşiği aşıyordu. Örnekleme sırasında API %50 CPU kullanırken veritabanı 16 çekirdeğin yaklaşık 15'ini tüketiyordu. Sebep panelin "bugünkü basım" sayımıydı: `WHERE punched_at >= bugün` filtresini `(employee_id, punched_at)` dizini karşılayamıyor, bu yüzden her istek 1,4 milyon satırı 3 paralel süreçle tarıyordu (98,9 ms). `time_punches (punched_at)` dizini eklendi (migrasyon 00010). Sorgu 0,29 ms'ye (index-only scan) indi, verim 22 kat arttı ve tüm gecikmeler yukarıdaki değerlere düştü.
 
 ## Testler
 

@@ -109,6 +109,22 @@ services:
         condition: service_healthy
     restart: "no"
 
+  # make load: k6 against the API on the compose network.
+  k6:
+    profiles: ["load"]
+    image: grafana/k6:0.57.0
+    command: ["run", "/scripts/load.js"]
+    environment:
+      BASE_URL: http://api:8080
+      DEMO_PASSWORD: ${DEMO_PASSWORD:-}
+    volumes:
+      - ./load:/scripts:ro
+    depends_on:
+      api:
+        condition: service_healthy
+      simulator:
+        condition: service_healthy
+
   frontend:
     build:
       context: ./frontend
