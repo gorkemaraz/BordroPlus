@@ -192,6 +192,49 @@ go test -v -run TestConcurrentApprovalsNeverOverdraw -count=10 ./internal/leave/
 
 `TestConcurrentApprovalsNeverOverdraw`: 34 gün bakiyesi olan çalışanın 10'ar günlük 5 talebi aynı anda onaylanır. Tam olarak 3 talep onaylanır, 2'si `insufficient_balance` alır ve bakiye 4 günde kalır. Her testin sonunda tüm hesaplar için "bakiye = defter toplamı ve ≥ 0" koşulu kontrol edilir.
 
+## Puantaj ve Fazla Mesai (F-3, T-2)
+
+| Uç nokta | İzin | Açıklama |
+|---|---|---|
+| `POST /api/v1/timesheet/punches` | `timesheet.manage` | Cihaz ya da elle basım aktarımı, en fazla 5.000 basım, hepsi ya da hiçbiri (`Idempotency-Key` destekli) |
+| `POST /api/v1/timesheet/clock` | kendisi | Web saati: sunucu zamanıyla `{"direction":"in"}` |
+| `GET /api/v1/timesheet/employees/{id}/days?from=&to=` | kapsam | Günlük oturumlar, segmentler, anomaliler ve düzeltme önerileri (en fazla 62 gün) |
+| `GET /api/v1/timesheet/employees/{id}/months/{YYYY-MM}` | kapsam | Haftalık döküm, toplamlar, yıllık fazla mesai ve 270 saat uyarısı |
+| `POST /api/v1/timesheet/employees/{id}/months/{YYYY-MM}/approve` | ekip yöneticisi, vekil, İK | Biten ve açık anomalisi olmayan ayı dondurur |
+| `GET /api/v1/timesheet/corrections` | kapsam | `?status=proposed&for_approval=true&employee_id=` |
+| `POST /api/v1/timesheet/corrections/{id}/approve` | ekip yöneticisi, vekil, İK | İsteğe bağlı `{"at":"2026-11-05T18:30:00+03:00"}` ile saat düzeltilir |
+| `POST /api/v1/timesheet/corrections/{id}/reject` | aynı | |
+
+**Basımlar değişmez, düzeltmeler önerilir.** Ham basımlar eklemeli-yalnızdır. Hesap, "etkin basımlar" üzerinden yapılır: ham basımlardan onaylı silme önerileri çıkarılır, onaylı ekleme önerileri `source = 'correction'` ile ayrı satır olarak eklenir. Motor (`internal/timesheet/engine.go`) her tutarsızlık için kendiliğinden bir öneri üretir:
+
+| Durum | Tespit | Öneri |
+|---|---|---|
+| Çift basım | Aynı yönde, 5 dakika içinde ikinci basım | İkincisini yok say (ilki kalır) |
+| Eksik çıkış | Girişten sonra yine giriş, ya da 16 saati geçen açık giriş | Girişten bir "tipik vardiya" sonra çıkış ekle |
+| Eksik giriş | Önünde giriş olmayan çıkış | Çıkıştan bir tipik vardiya önce giriş ekle |
+| 16 saati aşan oturum | Unutulmuş çıkış ve unutulmuş giriş | İkisi birden |
+
+Tipik vardiya, çalışanın temiz oturumlarının medyanıdır (en az 3 oturum varsa); yoksa 9 saattir. Önerilen saat komşu basımı asla geçmez. **Onaylanmamış anomaliye ait süre toplamlara girmez** ve o ay onaylanamaz. Sonradan gelen gerçek bir basım anomaliyi çözerse öneri "obsolete" olur ve uygulanamaz.
+
+**Hesap kuralları** (kural seti `TS-2026.1`):
+
+- **Ara dinlenme (md. 68):** günlük toplam 4 saate kadar 15 dakika, 7.5 saate kadar 30 dakika, daha fazlasında 1 saat. Gün içinde zaten verilmiş aralar bu süreden düşülür; kalan kısım günün en uzun oturumunun ortasından kesilir.
+- **Gece vardiyası:** oturum yerel gece yarısında bölünür. Oturumun iş günü, girişin yapıldığı gündür; dakikalar ise ait oldukları takvim gününe yazılır.
+- **Sınıflandırma:** Pazartesi–Cumartesi normal gün, Pazar hafta tatili, resmî tatil ise tatildir (yarım günlük tatillerde 13:00'ten sonrası).
+- **Fazla mesai (md. 41, 63):** haftanın normal dakikalarından 45 saati aşan kısım fazla mesaidir. Hafta tatili ve resmî tatil dakikaları kendi katsayısıyla ödenir ve 45 saate sayılmaz. Örnek: tatil haftasında 3.300 dakika çalışan birinin 2.280 dakikası normaldir, 1.020 dakikası tatildir ve fazla mesaisi yoktur.
+- **Katsayılar:** fazla mesai %150, hafta tatili %150, resmî tatil %200. Yıllık fazla mesai 270 saati aşarsa ay özetinde uyarı verilir.
+- **Ay ataması:** bir hafta Pazar gününün düştüğü bordro ayına yazılır (Kasım 2026 = 26 Ekim – 29 Kasım). Böylece haftalık 45 saat kuralı iki aya bölünmez; Pazar 22:00'de başlayıp Pazartesi biten bir vardiyanın Pazar kısmı bir aya, Pazartesi kısmı sonraki aya düşer.
+- **Ay onayı:** onaylanan ayın toplamları anlık görüntü (snapshot) olarak saklanır ve bordro bunu kullanır. Bu aya yeni basım, düzeltme ya da ikinci bir onay girilemez. Bir çalışanın puantajına yazan tüm işlemler çalışan bazlı bir advisory lock ile sıraya girer; kilit, satır kilitlerinden önce alınır.
+
+**Görev 2 kanıtı:**
+
+```bash
+make testdb-up
+cd backend
+go test -v ./internal/timesheet/      # motor tabloları + öneri/onay/ay kapanışı uçtan uca
+go test -v -run 'Timesheet|WebClock' ./internal/server/
+```
+
 ## Testler
 
 ```bash

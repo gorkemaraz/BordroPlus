@@ -91,3 +91,13 @@ Her kayıt: bağlam → karar → alternatifler → sonuçlar.
 **Alternatifler:** (1) Bakiyeyi her seferinde defterden toplamak ve `SERIALIZABLE` kullanmak: doğru olur, ancak yoğun onay anlarında yeniden deneme döngüsü gerekir ve hatalar daha az okunaklıdır. (2) Gece çalışan bir hakediş görevi: görev atlanırsa bakiye yanlış görünür ve geçmişe dönük düzeltme zorlaşır. (3) Tek bir bakiye sütunu, defter olmadan: "bu 34 gün nereden geldi?" sorusu cevapsız kalır.
 
 **Sonuçlar:** Her bakiye satır satır açıklanabilir; testler her seferinde "hesap bakiyesi = defter toplamı" koşulunu kontrol eder. Bakiye okuma işlemi de yazma yapar (hakediş yazımı); bu deterministik ve idempotent olduğu için kabul edildi. Bilinen sınırlama: onaylandıktan sonra eklenen bir resmî tatil, onaylı iznin düşülen gününü geriye dönük değiştirmez. Bekleyen talepler ise onay anında yeniden hesaplanır.
+
+## ADR-010: Puantaj ham basımlardan her seferinde yeniden hesaplanır; düzeltmeler öneri olarak saklanır
+
+**Bağlam:** Basımlar eksik ya da çift olabilir. Sistem düzeltme önermeli ama onaysız hiçbir şeyi değiştirmemeli. Gece vardiyaları gün ve hafta sınırlarını aşar. Bordro, onaylanmış ve artık değişmeyecek toplamlara ihtiyaç duyar.
+
+**Karar:** Ham basımlar hiç değişmez. Oturumlar, anomaliler ve toplamlar saf bir motorla her okumada etkin basımlardan yeniden hesaplanır. Bulunan her anomali, kararlı bir anahtarla (`out:<giriş basımı id>` gibi) `punch_corrections` tablosuna öneri olarak yazılır; aynı analiz tekrar çalıştığında yeni kayıt oluşmaz. Onaylanan bir öneri ya bir basımı gizler ya da yeni bir "correction" basımı ekler. Ay onayı toplamları JSON olarak dondurur. Bir çalışanın puantajına yazan işlemler, satır kilitlerinden önce alınan bir advisory lock ile sıraya girer.
+
+**Alternatifler:** (1) Oturumları ayrı bir tabloda kalıcı tutmak: her basım ve her düzeltmede yeniden eşleştirme ve tutarlılık sorunu doğar. (2) Basımı yerinde düzeltmek: denetim izi kaybolur ve "onaysız değiştirmeme" kuralı ihlal edilir. (3) Haftayı takvim ayına göre bölmek: 45 saat kuralı iki aya parçalanır ve fazla mesai yanlış hesaplanır.
+
+**Sonuçlar:** Kural değişikliği ya da onaylı düzeltme anında yansır ve geçmiş yeniden üretilebilir; donmuş aylar ise değişmez. Okuma işlemi öneri tablosuna yazar; bu idempotent olduğu için kabul edildi. Maliyet, okunan aralığın her istekte yeniden eşleştirilmesidir. Bu da çalışan başına günde birkaç basım için önemsizdir (62 günlük sınır var). Bilinen sınırlama: vardiya planı tutulmuyor; öneriler planlanan vardiya yerine tarihsel medyana dayanıyor.
