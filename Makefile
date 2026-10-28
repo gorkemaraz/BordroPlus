@@ -1,7 +1,7 @@
 # BordroPlus developer commands. Requires Docker (compose v2), Go and Node for local work.
 COMPOSE ?= docker compose
 
-.PHONY: help up down logs ps build test test-backend test-frontend lint cover clean testdb-up testdb-down
+.PHONY: help up down logs ps build test test-backend test-frontend lint cover clean testdb-up testdb-down verify reset-demo
 
 # Integration tests run against a throwaway Postgres (see testdb-up). Unset
 # TEST_DATABASE_URL to run unit tests only; DB tests are then skipped.
@@ -55,6 +55,13 @@ testdb-up: ## Start a throwaway Postgres for integration tests on 127.0.0.1:5543
 
 testdb-down: ## Stop the test Postgres
 	docker rm -f bordroplus-testdb
+
+verify: .env ## End-to-end PASS/FAIL table for every feature and task (stack must be up)
+	$(COMPOSE) --profile verify run --rm --build verify
+
+reset-demo: .env ## Drop all data and start again from the initial seed (same simulator seed, same data)
+	$(COMPOSE) down -v --remove-orphans
+	$(COMPOSE) up --build -d --wait
 
 clean: ## Stop the stack and delete volumes
 	$(COMPOSE) down -v --remove-orphans

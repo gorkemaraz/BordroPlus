@@ -13,7 +13,7 @@ COPY . .
 ARG VERSION=dev
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
-    for cmd in api migrate; do \
+    for cmd in api migrate simulator verify; do \
       go build -trimpath -ldflags "-s -w -X main.version=${VERSION}" -o /out/$cmd ./cmd/$cmd || exit 1; \
     done
 
@@ -22,6 +22,16 @@ COPY --from=build /out/migrate /migrate
 USER nonroot:nonroot
 ENTRYPOINT ["/migrate"]
 CMD ["up"]
+
+FROM gcr.io/distroless/static-debian12:nonroot AS simulator
+COPY --from=build /out/simulator /simulator
+USER nonroot:nonroot
+ENTRYPOINT ["/simulator"]
+
+FROM gcr.io/distroless/static-debian12:nonroot AS verify
+COPY --from=build /out/verify /verify
+USER nonroot:nonroot
+ENTRYPOINT ["/verify"]
 
 # api is the last stage so a plain `docker build` produces the API image.
 FROM gcr.io/distroless/static-debian12:nonroot AS api

@@ -70,6 +70,45 @@ services:
     stop_grace_period: 20s
     restart: unless-stopped
 
+  simulator:
+    build:
+      context: ./backend
+      target: simulator
+    environment:
+      <<: *backend-env
+      SIM_SEED: ${SIM_SEED:-42}
+      SIM_EMPLOYEES: ${SIM_EMPLOYEES:-1500}
+      SIM_TICK: ${SIM_TICK:-15s}
+    depends_on:
+      db:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    # Healthy once the two-year history is loaded (about a minute on first start).
+    healthcheck:
+      test: ["CMD", "/simulator", "healthcheck"]
+      interval: 10s
+      timeout: 8s
+      retries: 30
+      start_period: 240s
+    restart: unless-stopped
+
+  # make verify: end-to-end checks against the running stack.
+  verify:
+    profiles: ["verify"]
+    build:
+      context: ./backend
+      target: verify
+    environment:
+      VERIFY_BASE_URL: http://api:8080
+      DEMO_PASSWORD: ${DEMO_PASSWORD:-}
+    depends_on:
+      api:
+        condition: service_healthy
+      simulator:
+        condition: service_healthy
+    restart: "no"
+
   frontend:
     build:
       context: ./frontend
