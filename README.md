@@ -278,7 +278,7 @@ Yönetici, ekibinin bordrosunu göremez. Tutarlar API'de her zaman ondalık meti
 - **Fazla mesai:** yalnızca **onaylanmış (dondurulmuş) puantaj ayından** gelir. Puantaj onaylanmamışsa fazla mesai bordroya girmez ve bu durum bordro notunda belirtilir.
 - **Kümülatif matrah:** yılın önceki ayının kayıtlı sonucundan alınır. Önceki ay eksikse önce o hesaplanır. İlk maaş kaydından önceki aylar (sisteme geçiş öncesi) bordro dışı sayılır.
 
-**Geçmiş ay düzeltmesi:** Haziran'da Mart'tan geçerli bir zam girilirse `recalculate {"from":"2026-03"}` Mart'tan Haziran'a kadar her ayı sırayla yeniden hesaplar. Böylece Nisan–Haziran'ın kümülatif matrahı ve dilimi düzelir. Girdisi değişmeyen ay olduğu gibi kalır. Aynı kural seti sürümüyle tekrar çalıştırıldığında hiçbir şey değişmez (`input_hash`). Kapanmış dönemlerin değişmemesi ve farkın sonraki bordroya "geçmiş dönem düzeltmesi" olarak yansıması iş akışı aşamasının (T-4) konusudur.
+**Geçmiş ay düzeltmesi:** Haziran'da Mart'tan geçerli bir zam girilirse `recalculate {"from":"2026-03"}` Mart'tan Haziran'a kadar her ayı sırayla yeniden hesaplar. Böylece Nisan–Haziran'ın kümülatif matrahı ve dilimi düzelir. Girdisi değişmeyen ay olduğu gibi kalır. Aynı kural seti sürümüyle tekrar çalıştırıldığında hiçbir şey değişmez (`input_hash`). Kapanmış dönemler bu yolla değiştirilemez; onların düzeltmesi bir sonraki bölümde anlatılıyor.
 
 **Doğrulama:** Motor, yayımlanmış resmî rakamlarla regresyon testine bağlıdır:
 
@@ -299,6 +299,48 @@ cd backend && go test -v ./internal/payroll/
 - SGK tavanını aşan ek ödemenin sonraki iki aya devri (devreden tavan) uygulanmıyor.
 - Rapor günlerinde SGK'nın ödediği geçici iş göremezlik ödeneği modellenmiyor; rapor günleri işveren tarafından ücretli sayılıyor.
 - Engellilik indirimi uygulanmıyor.
+
+## Bordro İş Akışı ve Dönem Kapanışı (F-4, F-6, T-4)
+
+| Uç nokta | İzin | Geçiş |
+|---|---|---|
+| `GET /api/v1/payroll/periods`, `/periods/{YYYY-MM}` | `payroll.read.all` | |
+| `POST /api/v1/payroll/periods/{p}/run` | `payroll.calculate` | Taslak dönemi paralel hesaplar (dönem yoksa açar) |
+| `POST /api/v1/payroll/periods/{p}/submit` | `payroll.calculate` | taslak → kontrol |
+| `POST /api/v1/payroll/periods/{p}/approve` | `payroll.approve` | kontrol → onay |
+| `POST /api/v1/payroll/periods/{p}/reject` | `payroll.approve` | kontrol → taslak (`{"note"}` zorunlu) |
+| `POST /api/v1/payroll/periods/{p}/close` | `payroll.close` | onay → kapalı |
+
+**Kurallar:**
+
+- **Görevler ayrılığı:** bordroyu bordro uzmanı hesaplar ve kontrole gönderir; muhasebe onaylar, reddeder ve kapatır. Kontrole gönderen kişi, rolü ne olursa olsun aynı dönemi onaylayamaz.
+- **Kontrole gönderme koşulları:** dönem hatasız hesaplanmış olmalı. Önceki ay açılmışsa kapanmış olmalı, çünkü kümülatif matrah ondan gelir.
+- **Değişmezlik veritabanında:** kontrol, onay ve kapalı durumdaki dönemlerin `payroll_results` ve `payroll_adjustments` satırlarına `INSERT`, `UPDATE` ve `DELETE` bir trigger tarafından reddedilir (`55000`). Kapalı bir dönemin satırı değiştirilemez, hiçbir dönem silinemez. Uygulama kodu hata yapsa ya da biri doğrudan SQL çalıştırsa bile kapanmış bordro değişmez. API bu durumda `409 period_frozen` döner.
+
+**Paralel hesap ve ölçüm:** `run`, dönem satırını kilitler. Bu sayede aynı anda gönderim ya da ikinci bir çalıştırma araya giremez. Dönemdeki çalışanlar `DB_MAX_CONNS − 4` işçiye dağıtılır ve her çalışan kendi transaction'ında hesaplanır. Kural setleri çalıştırma başına önbelleğe alınır. Hesap, saklanan verinin saf bir fonksiyonu olduğu için sıra önemli değildir.
+
+| Ölçüm (`TestRun1500EmployeesUnder10Seconds`, yerel Docker Postgres) | Sonuç |
+|---|---|
+| 1.506 çalışan, 16 işçi, ilk hesap | ~1,0 sn |
+| Aynı kural seti ile yeniden hesap | ~0,9 sn, 0 satır değişti, aynı özet |
+
+**Yeniden üretilebilirlik:** her sonuç kural seti sürümü ve girdi özetiyle (`input_hash`) saklanır. Dönem özeti (`digest`), tüm çalışanların girdi özetlerinin çalışan sırasıyla alınan SHA-256'sıdır. Aynı kural seti ve aynı veriyle yeniden hesap aynı özeti verir ve hiçbir satırı güncellemez.
+
+**Geçmiş dönem düzeltmesi:** kapanmış bir ay asla yeniden hesaplanmaz. Bir ay kapandıktan sonra o aya etki eden bir veri değişirse, sıradaki açık bordro bu kapalı ayın brütünü bugünkü verilerle yeniden bulur. Bu tür veri değişiklikleri şunlardır:
+
+- geriye dönük maaş kaydı
+- sonradan onaylanan ücretsiz izin
+- geç onaylanan puantaj
+
+Bulunan fark, `Geçmiş dönem düzeltmesi (2026-01)` satırı olarak SGK'ya ve vergiye tabi biçimde eklenir. Hangi ayın etkilendiği, verinin oluşturulma ya da onay zamanının dönemin `closed_at` değerinden sonra olup olmamasıyla tespit edilir. Başka dönemlerde daha önce ödenmiş farklar (`payroll_adjustments`) düşülür; böylece bir fark tam olarak bir kez ödenir.
+
+Örnek (`TestPriorPeriodCorrection`): Ocak kapandıktan sonra 15 Ocak'tan geçerli 80.000 TL zam girilir. Kapalı Ocak bordrosu olduğu gibi kalır. Şubat bordrosuna (14 × 65.000 + 17 × 80.000) / 31 − 65.000 = 8.225,81 TL düzeltme satırı eklenir. Mart bordrosunda bu fark tekrar ödenmez.
+
+```bash
+cd backend && go test -v -run 'Period|Rerun|PriorPeriod|1500' ./internal/payroll/
+```
+
+**Bilinen sınırlama:** geçmiş dönem farkı, ait olduğu ayın SGK bildirgesine (ek APHB) değil, ödendiği ayın bordrosuna yansıtılıyor. Bu, vergi açısından ödeme ayında vergilendirme pratiğiyle uyumludur; ancak SGK açısından basitleştirilmiş bir yaklaşımdır.
 
 ## Testler
 
