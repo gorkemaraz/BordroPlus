@@ -61,3 +61,23 @@ Her kayıt: bağlam → karar → alternatifler → sonuçlar.
 **Alternatifler:** testcontainers-go (ek bağımlılık ve Docker-in-Docker gereksinimi), tek ortak veritabanı ile transaction rollback (eşzamanlılık testleri birden fazla bağlantı gerektirdiği için uygun değil).
 
 **Sonuçlar:** Testler birbirinden yalıtılmıştır ve paralel çalışabilir. Bir testin maliyeti yaklaşık 250 ms'dir. Migrasyonlar her test çalışmasında baştan uygulandığı için onlar da sürekli test edilmiş olur.
+
+## ADR-007: Maaşlar uygulama katmanında AES-256-GCM ile şifrelenir
+
+**Bağlam:** Spec, maaş alanlarının şifreli ya da maskeli saklanmasını istiyor. Bordro motoru ise 1.500 maaşı 10 saniyeden kısa sürede okuyup hesaplayabilmeli.
+
+**Karar:** Tutar (kuruş, int64) Go'da AES-256-GCM ile şifrelenir ve `bytea` olarak saklanır. Anahtar `SALARY_ENCRYPTION_KEY` ortam değişkeninden gelir. Şifreli metnin ilk baytı anahtar sürümüdür; böylece anahtar döndürüldüğünde eski kayıtlar okunmaya devam eder. GCM ek verisi `employee_salaries:<employee_id>:<valid_from>` olarak verilir.
+
+**Alternatifler:** (1) `pgcrypto` ile `pgp_sym_encrypt`: anahtar her sorguda SQL parametresi olarak veritabanına gider ve sorgu loglarına ya da `pg_stat_statements`'a düşebilir. (2) Disk ya da tablo alanı şifreleme: veritabanına erişen herkese açık metin gösterir, "maskeli" gereksinimini karşılamaz. (3) Yalnızca API'de maskeleme: veritabanı dökümünde maaşlar açık kalır.
+
+**Sonuçlar:** Veritabanı yedeği ya da SQL erişimi maaşları ele vermez. Bunun bedeli olarak maaşa göre SQL'de sıralama ya da toplama yapılamaz; raporlar ve bordro motoru maaşları Go'da çözer (1.500 çözme işlemi milisaniyeler sürer). Anahtar kaybolursa maaşlar okunamaz; anahtar yönetimi operasyonun sorumluluğundadır.
+
+## ADR-008: Veri kapsamı her istekte hesaplanır ve SQL'de uygulanır
+
+**Bağlam:** Yönetici yalnızca kendi alt ağacını görmeli. Vekâlet başladığı ya da bittiği anda geçerli olmalı. Birim taşındığında görünürlük hemen değişmeli.
+
+**Karar:** Kimlik doğrulama middleware'i her istekte kullanıcının yönettiği birimlerin ve bugün geçerli vekâletlerin ltree yollarını yükler (`Principal.TeamPaths`). Handler'lar `.all`, `.team` ve `.self` izinlerinden bir `Scope` üretir ve bunu her sorguya aynı `WHERE` parçasıyla ekler. Kapsam dışındaki tekil kayıtlar 403, var olmayanlar 404 döner.
+
+**Alternatifler:** (1) Kapsamı JWT içine koymak: vekâlet ya da birim taşıma, token süresi dolana kadar (15 dakika) yansımaz. (2) Satırları Go'da süzmek: sayfalama bozulur ve fazla veri okunur. (3) PostgreSQL Row Level Security: güçlü bir seçenek, ancak bağlantı havuzunda her istek için oturum değişkeni ayarlamayı gerektirir ve hata ayıklamayı zorlaştırır.
+
+**Sonuçlar:** İstek başına bir ek sorgu (iki dizinli arama) maliyeti var. Kapsam kuralı tek bir yerde tanımlı (`org.Scope`) ve izin, puantaj gibi sonraki modüller de aynısını kullanacak. 403 ile 404'ün ayrılması kaydın var olup olmadığını ele verir; spec yetkisiz erişimde 403 istediği için bu bilinçli bir tercih.

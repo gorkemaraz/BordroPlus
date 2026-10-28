@@ -101,6 +101,7 @@ Ayrıntılı karar kayıtları: [DECISIONS.md](DECISIONS.md)
 | Ekip izin/puantaj görme ve onaylama | | ✓ | | | | |
 | Tüm çalışanları görme | | | ✓ | ✓ | ✓ | ✓ |
 | Çalışan ve organizasyon düzenleme | | | ✓ | | | |
+| Vekâlet verme (kendi kapsamı / herkes için) | | kendi | herkes | | | |
 | İzin/puantaj yönetimi (tüm şirket) | | | ✓ | | | |
 | Maaşı açık görme | | | ✓ | ✓ | | |
 | Bordro hesaplama, ek kalemler | | | | ✓ | | |
@@ -109,6 +110,44 @@ Ayrıntılı karar kayıtları: [DECISIONS.md](DECISIONS.md)
 | Denetim kaydı | | | | | | ✓ |
 
 Görevler ayrılığı: bordroyu hesaplayan rol onaylayamaz ve dönemi kapatamaz. Bu kural bir testle güvence altındadır.
+
+## Organizasyon, Personel Kartı ve Yetki Kapsamı (F-1, T-5)
+
+| Uç nokta | İzin | Açıklama |
+|---|---|---|
+| `GET /api/v1/org/units` | `org.read` | Tüm birimler: düz liste, `parent_id`, ltree `path`, yönetici, aktif çalışan sayısı |
+| `POST /api/v1/org/units` | `org.write` | Birim ekler (`Idempotency-Key` destekli) |
+| `PATCH /api/v1/org/units/{id}` | `org.write` | Ad, kod, üst birim (taşıma) veya yönetici değiştirir; alt ağaç birlikte taşınır |
+| `GET /api/v1/employees` | kapsam | `?q=&org_unit_id=&include_terminated=&limit=&cursor=` |
+| `GET /api/v1/employees/{id}` | kapsam | Kapsam dışındaysa 403, kayıt yoksa 404 |
+| `POST /api/v1/employees` | `employee.write` | İsteğe bağlı ilk maaşla birlikte (`Idempotency-Key` destekli) |
+| `PATCH /api/v1/employees/{id}` | `employee.write` | Ad, unvan, birim (transfer), işten çıkış tarihi |
+| `GET /api/v1/employees/{id}/salaries` | `salary.read` veya kendisi | Maaş geçmişi |
+| `POST /api/v1/employees/{id}/salaries` | `salary.write` | `{"amount":"72000.50","valid_from":"2026-07-01"}` |
+| `GET /api/v1/delegations` | herkes | İK hepsini, diğerleri verdiği ya da aldığı vekâletleri görür; `?active=true` |
+| `POST /api/v1/delegations` | `delegation.manage.self` / `.all` | Yönetici kendi kapsamını, İK herhangi bir yöneticininkini devreder |
+| `POST /api/v1/delegations/{id}/revoke` | aynı | Vekâleti hemen sonlandırır |
+
+**Kapsam SQL'de uygulanır.** Satırlar Go tarafında süzülmez; her sorgu aynı koşulu taşır:
+
+```sql
+WHERE ($1::bool                     -- .all izni
+       OR u.path <@ ANY($2::ltree[]) -- yöneticinin (ve vekâlet verenlerin) alt ağaçları
+       OR e.id = $3)                  -- kendisi
+```
+
+`path <@` sorgusu `org_units_path_gist` GiST dizinini kullanır. 1.500 çalışanla alınan `EXPLAIN (ANALYZE)` çıktısı simülatör aşamasında buraya eklenecek.
+
+**Vekâlet.** Yönetici izindeyken kapsamını belirli bir tarih aralığı için bir vekile devreder. Vekilin rolü ne olursa olsun, vekâlet süresince yalnızca *ekip* izinlerini alır (ekibi görme, izin ve puantaj onayı); şirket geneli izinler hiçbir zaman devredilmez. Vekil kapsamı başkasına aktaramaz. Kapsam token'dan değil, her istekte veritabanından hesaplanır; vekâlet başlar başlamaz ya da iptal edildiği anda etkili olur. Aynı yöneticinin çakışan iki vekâleti `EXCLUDE USING gist` kısıtıyla engellenir; eşzamanlı isteklerde yalnızca biri kabul edilir (`TestConcurrentOverlappingDelegations`).
+
+**Maaş gizliliği.** Maaşlar API tarafında AES-256-GCM ile şifrelenir; veritabanı açık tutarı hiç görmez. Şifreli değer GCM ek verisiyle (AAD) `(employee_id, valid_from)` ikilisine bağlıdır; bir satırın şifreli değeri başka bir satıra kopyalanırsa çözülemez. Maaşı açık görebilenler `salary.read` iznine sahip roller (İK, bordro) ve çalışanın kendisidir; diğerleri `"salary_masked": true` alır. Tutarlar denetim kaydına yazılmaz, yalnızca değişikliğin yapıldığı kaydedilir.
+
+**Görev 5 kanıtı:**
+
+```bash
+make testdb-up
+cd backend && go test -v -run 'TestEmployeeListScopes|TestEmployeeCardAccess|TestDelegation|TestConcurrentOverlapping|TestUnitMove|TestSalaryEncrypted' ./internal/server/
+```
 
 ## Testler
 
