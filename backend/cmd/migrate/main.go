@@ -1,10 +1,11 @@
 // Command migrate applies the embedded database migrations.
 //
-//	migrate up       apply all pending migrations (default)
+//	migrate up       apply all pending migrations, then seed demo data (default)
 //	migrate status   print migration status
 //	migrate down     roll back the latest migration
 //
 // In docker compose it runs as a one-shot service before the API starts.
+// Demo seeding is skipped when SEED_DEMO=false.
 package main
 
 import (
@@ -20,6 +21,7 @@ import (
 	"bordroplus/internal/config"
 	"bordroplus/internal/db"
 	"bordroplus/internal/logging"
+	"bordroplus/internal/seed"
 	"bordroplus/migrations"
 )
 
@@ -50,7 +52,7 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	pool.Close()
+	defer pool.Close()
 
 	sqlDB, err := sql.Open("pgx", cfg.DatabaseURL)
 	if err != nil {
@@ -83,5 +85,13 @@ func run() error {
 		return err
 	}
 	log.Info("migrations applied", "command", cmd, "version", v)
+
+	if cmd == "up" && cfg.SeedDemo {
+		n, err := seed.Demo(ctx, pool, cfg.DemoPassword)
+		if err != nil {
+			return fmt.Errorf("seed demo: %w", err)
+		}
+		log.Info("demo seed done", "accounts_created", n)
+	}
 	return nil
 }
