@@ -22,6 +22,7 @@ import (
 	"bordroplus/internal/leave"
 	"bordroplus/internal/org"
 	"bordroplus/internal/payroll"
+	"bordroplus/internal/report"
 	"bordroplus/internal/secret"
 	"bordroplus/internal/timesheet"
 )
@@ -92,6 +93,7 @@ func mountAPI(api chi.Router, d Deps) {
 		leave.NewHandler(leave.NewService(d.Pool)).Routes(p, idem)
 		timesheet.NewHandler(timesheet.NewService(d.Pool)).Routes(p, idem)
 		payroll.NewHandler(payroll.NewService(d.Pool, d.Box), int(d.Config.DBMaxConns)-4, idem).Routes(p)
+		report.NewHandler(d.Pool).Routes(p)
 	})
 }
 
