@@ -1,0 +1,411 @@
+# BordroPlus API — VS Code REST Client koleksiyonu
+# Stack: docker compose up --build. Önce "Girişler" bölümündeki istekleri çalıştırın;
+# sonraki istekler oradaki token'ları kullanır. Parola: .env DEMO_PASSWORD.
+
+@host = http://localhost:8080
+@base = {{host}}/api/v1
+@password = Demo.2026!
+
+### Sağlık ve metrikler
+GET {{host}}/health
+
+###
+GET {{host}}/metrics
+
+############################################################
+# Girişler
+############################################################
+
+# @name loginEmployee
+POST {{base}}/auth/login
+Content-Type: application/json
+
+{"email": "calisan@bordroplus.test", "password": "{{password}}"}
+
+###
+# @name loginManager
+POST {{base}}/auth/login
+Content-Type: application/json
+
+{"email": "yonetici@bordroplus.test", "password": "{{password}}"}
+
+###
+# @name loginHR
+POST {{base}}/auth/login
+Content-Type: application/json
+
+{"email": "ik@bordroplus.test", "password": "{{password}}"}
+
+###
+# @name loginPayroll
+POST {{base}}/auth/login
+Content-Type: application/json
+
+{"email": "bordro@bordroplus.test", "password": "{{password}}"}
+
+###
+# @name loginAccounting
+POST {{base}}/auth/login
+Content-Type: application/json
+
+{"email": "muhasebe@bordroplus.test", "password": "{{password}}"}
+
+###
+# @name loginAuditor
+POST {{base}}/auth/login
+Content-Type: application/json
+
+{"email": "denetci@bordroplus.test", "password": "{{password}}"}
+
+@employee = {{loginEmployee.response.body.access_token}}
+@manager = {{loginManager.response.body.access_token}}
+@hr = {{loginHR.response.body.access_token}}
+@payroll = {{loginPayroll.response.body.access_token}}
+@accounting = {{loginAccounting.response.body.access_token}}
+@auditor = {{loginAuditor.response.body.access_token}}
+@employeeId = {{loginEmployee.response.body.user.employee_id}}
+@managerEmployeeId = {{loginManager.response.body.user.employee_id}}
+
+### Yanlış parola → 401 invalid_credentials
+POST {{base}}/auth/login
+Content-Type: application/json
+
+{"email": "calisan@bordroplus.test", "password": "yanlis"}
+
+### Oturumdaki kullanıcı ve izinleri
+GET {{base}}/auth/me
+Authorization: Bearer {{employee}}
+
+### Refresh (cookie ile; REST Client cookie'yi saklar)
+POST {{base}}/auth/refresh
+
+### Çıkış
+POST {{base}}/auth/logout
+
+### Yetki ihlali: çalışan denetim kaydını okuyamaz → 403
+GET {{base}}/audit-log
+Authorization: Bearer {{employee}}
+
+### Sistem durumu (simülatör, bugünkü basımlar)
+GET {{base}}/system/status
+Authorization: Bearer {{hr}}
+
+############################################################
+# F-1 / T-5 Organizasyon, personel kartı, vekâlet
+############################################################
+
+### Organizasyon ağacı
+GET {{base}}/org/units
+Authorization: Bearer {{employee}}
+
+### Çalışan listesi (kapsam: İK hepsi, yönetici alt ağacı, çalışan kendisi)
+GET {{base}}/employees?limit=20
+Authorization: Bearer {{manager}}
+
+### Arama ve alt ağaç filtresi
+GET {{base}}/employees?q=yılmaz&limit=20
+Authorization: Bearer {{hr}}
+
+### Kendi kartı (maaş görünür)
+GET {{base}}/employees/{{employeeId}}
+Authorization: Bearer {{employee}}
+
+### Denetçi aynı kartı görür, maaş maskeli
+GET {{base}}/employees/{{employeeId}}
+Authorization: Bearer {{auditor}}
+
+### Yönetici alt ağacı dışındaki kart → 403
+GET {{base}}/employees/3
+Authorization: Bearer {{manager}}
+
+### Yeni çalışan (idempotent)
+POST {{base}}/employees
+Authorization: Bearer {{hr}}
+Content-Type: application/json
+Idempotency-Key: rest-client-ornek-1
+
+{"employee_no": "E-0001", "first_name": "Mert", "last_name": "Yıldız", "title": "Analist",
+ "org_unit_id": 3, "hire_date": "2026-02-01", "salary": {"amount": "72000.50", "valid_from": "2026-02-01"}}
+
+### Kart güncelleme (transfer / unvan / işten çıkış)
+PATCH {{base}}/employees/{{employeeId}}
+Authorization: Bearer {{hr}}
+Content-Type: application/json
+
+{"title": "Kıdemli Yazılım Geliştirici"}
+
+### Maaş geçmişi
+GET {{base}}/employees/{{employeeId}}/salaries
+Authorization: Bearer {{payroll}}
+
+### Yeni maaş (geriye dönük olabilir)
+POST {{base}}/employees/{{employeeId}}/salaries
+Authorization: Bearer {{hr}}
+Content-Type: application/json
+
+{"amount": "70000.00", "valid_from": "2026-11-01"}
+
+### Birim taşıma (alt ağaç birlikte taşınır)
+PATCH {{base}}/org/units/3
+Authorization: Bearer {{hr}}
+Content-Type: application/json
+
+{"name": "Yazılım Geliştirme"}
+
+### Vekâlet: yönetici izindeyken çalışana devreder
+POST {{base}}/delegations
+Authorization: Bearer {{manager}}
+Content-Type: application/json
+
+{"delegate_employee_id": {{employeeId}}, "start_date": "2026-12-01", "end_date": "2026-12-05", "reason": "yıllık izin"}
+
+###
+GET {{base}}/delegations?active=true
+Authorization: Bearer {{manager}}
+
+###
+POST {{base}}/delegations/1/revoke
+Authorization: Bearer {{manager}}
+
+############################################################
+# F-2 / T-1 İzin
+############################################################
+
+### Resmî tatiller
+GET {{base}}/leave/holidays?year=2026
+Authorization: Bearer {{employee}}
+
+### Bakiye: devreden, son ve sonraki hakediş
+GET {{base}}/leave/employees/{{employeeId}}/balance
+Authorization: Bearer {{employee}}
+
+### Defter (yürüyen bakiye)
+GET {{base}}/leave/employees/{{employeeId}}/ledger
+Authorization: Bearer {{employee}}
+
+### Kendi talebi
+# @name leaveRequest
+POST {{base}}/leave/requests
+Authorization: Bearer {{employee}}
+Content-Type: application/json
+
+{"leave_type": "annual", "start_date": "2026-12-14", "end_date": "2026-12-18", "reason": "tatil"}
+
+### Yarım gün
+POST {{base}}/leave/requests
+Authorization: Bearer {{employee}}
+Content-Type: application/json
+
+{"leave_type": "annual", "start_date": "2026-12-22", "end_date": "2026-12-22", "half_day": "morning"}
+
+### Yöneticinin onay kuyruğu
+GET {{base}}/leave/requests?for_approval=true
+Authorization: Bearer {{manager}}
+
+### Onay
+POST {{base}}/leave/requests/{{leaveRequest.response.body.id}}/approve
+Authorization: Bearer {{manager}}
+Content-Type: application/json
+
+{"note": "iyi tatiller"}
+
+### Ret
+POST {{base}}/leave/requests/{{leaveRequest.response.body.id}}/reject
+Authorization: Bearer {{manager}}
+Content-Type: application/json
+
+{"note": "yoğun dönem"}
+
+### İptal (çalışan: bekleyen; İK: onaylı da)
+POST {{base}}/leave/requests/{{leaveRequest.response.body.id}}/cancel
+Authorization: Bearer {{hr}}
+
+### İK adına rapor girişi (geçmiş tarihli olabilir)
+POST {{base}}/leave/requests
+Authorization: Bearer {{hr}}
+Content-Type: application/json
+
+{"employee_id": {{employeeId}}, "leave_type": "sick", "start_date": "2026-12-16", "end_date": "2026-12-17"}
+
+### Tatil ekleme
+POST {{base}}/leave/holidays
+Authorization: Bearer {{hr}}
+Content-Type: application/json
+
+{"date": "2027-03-09", "name": "Ramazan Bayramı 1. gün", "half_day": false}
+
+############################################################
+# F-3 / T-2 Puantaj
+############################################################
+
+### Basım aktarımı (cihaz)
+POST {{base}}/timesheet/punches
+Authorization: Bearer {{hr}}
+Content-Type: application/json
+
+{"punches": [
+  {"employee_id": {{employeeId}}, "punched_at": "2025-12-01T08:00:00+03:00", "direction": "in", "device_id": "T1"},
+  {"employee_id": {{employeeId}}, "punched_at": "2025-12-01T08:02:00+03:00", "direction": "in", "device_id": "T1"},
+  {"employee_id": {{employeeId}}, "punched_at": "2025-12-01T17:30:00+03:00", "direction": "out", "device_id": "T1"},
+  {"employee_id": {{employeeId}}, "punched_at": "2025-12-02T08:00:00+03:00", "direction": "in", "device_id": "T1"},
+  {"employee_id": {{employeeId}}, "punched_at": "2025-12-04T22:00:00+03:00", "direction": "in", "device_id": "T1"},
+  {"employee_id": {{employeeId}}, "punched_at": "2025-12-05T06:00:00+03:00", "direction": "out", "device_id": "T1"}
+]}
+
+### Web saati (sunucu zamanı)
+POST {{base}}/timesheet/clock
+Authorization: Bearer {{employee}}
+Content-Type: application/json
+
+{"direction": "in"}
+
+### Günler, anomaliler ve öneriler
+GET {{base}}/timesheet/employees/{{employeeId}}/days?from=2025-12-01&to=2025-12-07
+Authorization: Bearer {{manager}}
+
+### Ay özeti (haftalık, fazla mesai, 270 saat uyarısı)
+GET {{base}}/timesheet/employees/{{employeeId}}/months/2025-12
+Authorization: Bearer {{manager}}
+
+### Onay bekleyen öneriler
+# @name proposals
+GET {{base}}/timesheet/corrections?for_approval=true
+Authorization: Bearer {{manager}}
+
+### Öneri onayı (eksik basım için saat düzeltilebilir)
+POST {{base}}/timesheet/corrections/{{proposals.response.body.items[0].id}}/approve
+Authorization: Bearer {{manager}}
+Content-Type: application/json
+
+{"note": "kontrol edildi"}
+
+### Öneri reddi
+POST {{base}}/timesheet/corrections/{{proposals.response.body.items[0].id}}/reject
+Authorization: Bearer {{manager}}
+
+### Ay onayı (dönem bitmiş ve anomali kalmamış olmalı)
+POST {{base}}/timesheet/employees/{{employeeId}}/months/2025-12/approve
+Authorization: Bearer {{manager}}
+
+############################################################
+# F-4 / F-5 / F-6 / T-3 / T-4 Bordro
+############################################################
+
+### Parametre setleri
+GET {{base}}/payroll/rule-sets
+Authorization: Bearer {{payroll}}
+
+### Tek çalışan hesabı
+POST {{base}}/payroll/employees/{{employeeId}}/calculate
+Authorization: Bearer {{payroll}}
+Content-Type: application/json
+
+{"period": "2026-10"}
+
+### Geçmiş ay düzeltmesi (açık aylar)
+POST {{base}}/payroll/employees/{{employeeId}}/recalculate
+Authorization: Bearer {{payroll}}
+Content-Type: application/json
+
+{"from": "2026-09"}
+
+### Sonuçlar
+GET {{base}}/payroll/employees/{{employeeId}}/results?year=2026
+Authorization: Bearer {{payroll}}
+
+###
+GET {{base}}/payroll/employees/{{employeeId}}/results/2026-10
+Authorization: Bearer {{payroll}}
+
+### Dönemler
+GET {{base}}/payroll/periods
+Authorization: Bearer {{auditor}}
+
+### Dönemi paralel hesapla (ilk açık ay: önceki ay kapalı olmalı)
+POST {{base}}/payroll/periods/2025-01/run
+Authorization: Bearer {{payroll}}
+
+### Kontrole gönder
+POST {{base}}/payroll/periods/2025-01/submit
+Authorization: Bearer {{payroll}}
+
+### Reddet (not zorunlu)
+POST {{base}}/payroll/periods/2025-01/reject
+Authorization: Bearer {{accounting}}
+Content-Type: application/json
+
+{"note": "SGK günlerini kontrol edin"}
+
+### Onayla
+POST {{base}}/payroll/periods/2025-01/approve
+Authorization: Bearer {{accounting}}
+
+### Kapat
+POST {{base}}/payroll/periods/2025-01/close
+Authorization: Bearer {{accounting}}
+
+### Kalemler: borç (3 taksit), avans, prim
+POST {{base}}/payroll/items
+Authorization: Bearer {{payroll}}
+Content-Type: application/json
+Idempotency-Key: rest-client-borc-1
+
+{"employee_id": {{employeeId}}, "kind": "loan", "label": "Eğitim borcu", "amount": "9000.00", "instalments": 3, "start_period": "2026-11"}
+
+###
+POST {{base}}/payroll/items
+Authorization: Bearer {{payroll}}
+Content-Type: application/json
+
+{"employee_id": {{employeeId}}, "kind": "bonus", "label": "Performans primi", "amount": "5000.00", "start_period": "2026-11"}
+
+###
+GET {{base}}/payroll/items?employee_id={{employeeId}}
+Authorization: Bearer {{payroll}}
+
+###
+POST {{base}}/payroll/items/1/cancel
+Authorization: Bearer {{payroll}}
+
+############################################################
+# F-7 Raporlar ve bordro çıktısı
+############################################################
+
+### Kendi bordrosu (dönem onaylı/kapalı olmalı)
+GET {{base}}/payroll/employees/{{employeeId}}/payslips/2025-01
+Authorization: Bearer {{employee}}
+
+### Yazdırılabilir bordro (tarayıcıdan PDF)
+GET {{base}}/payroll/employees/{{employeeId}}/payslips/2026-10?format=html
+Authorization: Bearer {{payroll}}
+
+### Birim bazında bordro özeti
+GET {{base}}/reports/payroll-summary?period=2025-01&level=2
+Authorization: Bearer {{auditor}}
+
+### CSV
+GET {{base}}/reports/payroll-summary?period=2025-01&format=csv
+Authorization: Bearer {{accounting}}
+
+### İşveren maliyeti (aylık)
+GET {{base}}/reports/employer-cost?year=2025
+Authorization: Bearer {{accounting}}
+
+### İzin kullanımı
+GET {{base}}/reports/leave-usage?level=2
+Authorization: Bearer {{hr}}
+
+### Fazla mesai ve 270 saat aşımı
+GET {{base}}/reports/overtime?month=2025-11
+Authorization: Bearer {{hr}}
+
+############################################################
+# Denetim kaydı
+############################################################
+
+GET {{base}}/audit-log?limit=20
+Authorization: Bearer {{auditor}}
+
+###
+GET {{base}}/audit-log?action=payroll.close
+Authorization: Bearer {{auditor}}

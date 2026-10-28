@@ -51,13 +51,17 @@ Seed idempotenttir: her açılışta yalnızca eksik kayıtları ekler, değişt
 
 ```
  tarayıcı ──► frontend (nginx :3000) ──/api, /health──► api (Go :8080) ──► db (PostgreSQL 16)
-                                                          ▲
-                                       migrate (tek seferlik, goose) ──┘
+                                                          ▲                         ▲
+                                       migrate (tek seferlik: goose + demo seed)    │
+                                       simulator (2 yıllık geçmiş + canlı basımlar) ┘
+                                       verify (profil: make verify → PASS/FAIL)
 ```
 
 - **db**: `postgres:16-alpine`, yalnızca iç ağda. `pg_isready` sağlık kontrolü.
 - **migrate**: gömülü (embed) goose migrasyonlarını uygular ve tamamlanınca çıkar. API, `service_completed_successfully` koşuluyla bunu bekler.
 - **api**: Go + chi + pgx. `/health` (DB ping dahil), `/metrics` (Prometheus), JSON log, istek bazlı zaman aşımı, düzgün kapanış.
+- **simulator**: 1.500 çalışanlık şirketi ve 2 yıllık geçmişi yükler, sonra bugünün basımlarını canlı üretir (bkz. Veri Üretici).
+- **verify** (yalnız `--profile verify`): uçtan uca doğrulama.
 - **frontend**: React + Vite + TypeScript, `nginx-unprivileged` ile servis edilir. API'ye aynı origin üzerinden ters vekil (reverse proxy) ile gider.
 
 Tüm imajlar çok aşamalı derlenir ve root olmayan kullanıcıyla çalışır (Go: `distroless/static:nonroot`, frontend: uid 101).
@@ -375,6 +379,67 @@ cd backend && go test -v -run 'Period|Rerun|PriorPeriod|1500' ./internal/payroll
 - **CSV:** Türkçe yerel ayarlı tablolama programlarının doğrudan açabilmesi için `;` ayırıcı ve UTF-8 BOM kullanılır.
 - **İzin raporu:** hakedişler, tembel yazılan defterden okunmak yerine motorla hesaplanır; böylece rapor eksiksiz olur ve veritabanına hiçbir şey yazmaz.
 - **Bilinen sınırlama:** gerçek PDF üretimi (bonus) yapılmadı. Yazdırılabilir HTML sayfası, tarayıcının "PDF olarak kaydet" özelliğiyle aynı belgeyi üretir. Sunucu tarafında PDF için Türkçe karakter desteği olan bir fontun imaja gömülmesi gerekirdi.
+
+## Veri Üretici (Simülatör)
+
+`simulator` ayrı bir compose servisidir. İlk açılışta migrasyon ve demo seed'den sonra tek bir transaction içinde PostgreSQL `COPY` ile şunları yükler:
+
+| Veri | Miktar (tohum 42) |
+|---|---|
+| Çalışan (19 birim: gece vardiyası, depo, çağrı merkezi, satış, BT …) | 1.500 |
+| Maaş kaydı (2025 ve 2026, şifreli) | ≈2.800 |
+| Onaylı izin talebi (yıllık, rapor, ücretsiz) ve tutarlı izin defteri | ≈8.500 |
+| Basım (2 yıl) | ≈1,4 milyon |
+| Yükleme süresi | ≈35 sn |
+
+- **Bilinçli hatalar:** vardiyaların ≈%0,6'sında çıkış, ≈%0,4'ünde giriş basımı eksiktir; ≈%1,6'sında çift basım vardır. Bunlara ek olarak Cumartesi mesaisi, gece vardiyası ve depoda resmî tatil çalışması bulunur.
+- **Aynı tohum, aynı veri:** tüm değerler tek bir `SIM_SEED`'den, varlık başına ayrı PCG akışlarıyla (tohum, çalışan sırası, tarih) türetilir. Map sırasına ya da saate bağlı hiçbir şey yoktur. Bu sayede canlı modda üretilen bir gün, toplu yüklemede üretilen aynı günle birebir aynıdır.
+- **İzin geçmişi kurallara uyar:** yıllık izin, başlangıç tarihindeki bakiyeye sığmıyorsa üretilmez; izinler çakışmaz; `bakiye = defter toplamı` koşulu korunur.
+- **Canlı mod:** her `SIM_TICK` (varsayılan 15 sn) bugünün vardiya planından zamanı gelmiş basımları ekler. Cihaz basımlarındaki benzersiz dizin sayesinde aynı basım iki kez yazılmaz. Onaylı izindeki çalışanlar ve onaylanmış puantaj ayları atlanır. `GET /api/v1/system/status` aktif çalışan sayısını, bugünkü basımları, bekleyen işleri ve simülatörün son çalışma zamanını gösterir.
+- Yükleme yapılmışsa (`simulator_state`) tekrar yapılmaz. `make reset-demo` hacmi silip her şeyi aynı tohumla yeniden kurar.
+
+## Hızlı Doğrulama
+
+```bash
+make verify        # 17 kontrol: HEALTH, AUTH, AUTHZ, IDEMP, F-1..F-7, T-1..T-5, AUDIT → PASS/FAIL tablosu
+make reset-demo    # ilk seed haline dön
+```
+
+Ayrıntılar, demo hesapları, her kimlik için "nasıl denenir / beklenen sonuç" tablosu ve kanıt komutları [TESTING.md](TESTING.md) dosyasındadır. Tüm uç noktalar [requests.http](requests.http) dosyasında demo hesaplarla çalışır durumdadır.
+
+## Dizinler ve `EXPLAIN (ANALYZE)`
+
+Ölçümler simülatör verisi üzerinde alındı: 1.405.389 basım, 8.518 izin talebi, 19.002 defter satırı. Ortam yerel Docker'da PostgreSQL 16. "Dizinsiz" ölçüm için dizin bir transaction içinde düşürüldü, sorgu çalıştırıldı ve `ROLLBACK` yapıldı.
+
+**1. `time_punches (employee_id, punched_at)`:** puantaj ekranı ve analizi. Bir çalışanın bir aylık basımlarını, onaylı silme önerileri hariç getirir.
+
+```
+Dizinli:   Index Scan using time_punches_employee_time_idx on time_punches p (actual time=0.038..0.045 rows=49 loops=1)
+             Index Cond: ((employee_id = $0) AND (punched_at >= '2026-09-26 …') AND (punched_at < '2026-11-03 …'))
+             Buffers: shared hit=6 read=3
+           Execution Time: 0.142 ms
+Dizinsiz:  Parallel Seq Scan on time_punches p (actual time=11.442..19.577 rows=16 loops=3)
+             Rows Removed by Filter: 468447
+             Buffers: shared hit=12013 read=2476
+           Execution Time: 29.525 ms
+```
+
+Fark yaklaşık **200 kat** (0,14 ms'ye karşı 29,5 ms) ve okunan sayfa sayısı 10'a karşı 14.599. Dizin, puantaj analizinin çalışan sayısından bağımsız kalmasını sağlıyor. Dizinsiz durumda her istek tüm tabloyu tarar ve maliyet basım sayısıyla doğrusal büyür.
+
+**2. `leave_requests (employee_id, start_date DESC)`:** izin listesi ve bakiye ekranı. Bir çalışanın talepleri, en yeni önce.
+
+```
+Dizinli:   Index Scan using leave_requests_employee_idx on leave_requests (actual time=0.021..0.021 rows=3 loops=1)
+           Execution Time: 0.042 ms   (6 sayfa)
+Dizinsiz:  Seq Scan on leave_requests … Rows Removed by Filter: 8515 → Sort
+           Execution Time: 0.367 ms   (145 sayfa)
+```
+
+Bu tabloda fark yaklaşık 9 kat ve mutlak süreler küçük. Ancak dizin sıralamayı da karşıladığı için `ORDER BY … LIMIT` ayrı bir sıralama adımı gerektirmiyor.
+
+**3. `org_units USING gist (path)`:** yönetici alt ağacı. `org_units` 22 satırlık bir tablo olduğu için planlayıcı doğru şekilde sıralı taramayı seçiyor (0,34 ms; çalışanlar `employees_org_unit_idx` ile birleştiriliyor). Sıralı tarama kapatıldığında `Index Scan using org_units_path_gist … Index Cond: (path <@ 'genel_mudurluk.operasyon')` planı görülüyor. Bu dizin, ağaç binlerce birime büyüdüğünde devreye girmek üzere orada.
+
+Diğer kritik dizinler: `leave_ledger (employee_id, effective_date, id)` (bakiye özeti 0,07 ms), `payroll_results (employee_id, period)` (benzersiz; kümülatif matrah zinciri), kısmi `punch_corrections (employee_id, work_date) WHERE status = 'proposed'` (onay kuyruğu) ve `idempotency_keys (user_id, key)`.
 
 ## Testler
 

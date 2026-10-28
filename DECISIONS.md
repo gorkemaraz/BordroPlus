@@ -121,3 +121,23 @@ Her kayıt: bağlam → karar → alternatifler → sonuçlar.
 **Alternatifler:** (1) Değişmezliği yalnızca uygulamada kontrol etmek: bir hata ya da elle yapılan bir SQL güncellemesi kapanmış bordroyu bozabilir. (2) Kapalı ayı yeniden hesaplayıp yeni sürüm olarak saklamak: hukuken ödenmiş ve bildirilmiş bordro değişmiş gibi görünür ve kümülatif zincir karmaşıklaşır. (3) Tüm dönemi tek transaction'da sırayla hesaplamak: basittir ama 1.500 çalışan için uzun süren tek bir transaction ve tek çekirdek demektir.
 
 **Sonuçlar:** Kapalı bordro gerçekten değişmez. Düzeltmeler izlenebilir: kaynak ay, hedef ay, tutar ve gerekçe saklanır. Paralel hesap yerelde 1.506 çalışan için yaklaşık 1 saniye sürüyor. Bunun bedeli olarak açık dönemin hesabı, etkilenen kapalı aylar için ek girdi türetir; değişiklik takibi sayesinde bu yalnızca veri gerçekten değiştiğinde yapılır. Bilinen sınırlama: fark SGK açısından ait olduğu aya değil, ödendiği aya bildirilir.
+
+## ADR-013: Simülatör, veritabanına doğrudan COPY ile yazar; veri varlık bazlı tohum akışlarından türetilir
+
+**Bağlam:** 1.500 çalışan, 2 yıllık puantaj ve izin geçmişi üretilmeli. Aynı tohum aynı veriyi vermeli. Sistem, soğuk makinede 5 dakika içinde hazır olmalı. Arayüzde sistemin canlı olduğu görülebilmeli.
+
+**Karar:** Simülatör, API yerine domain paketlerini (izin motoru, şifreleme, eşleştirme) kullanarak veriyi kendisi üretir ve tek bir transaction içinde `COPY` ile yazar. Rastgelelik tek bir global akıştan değil, `(tohum, çalışan sırası, tarih)` üçlüsünden türetilen ayrı PCG akışlarından gelir. Canlı mod aynı `Day` fonksiyonunu kullanır ve cihaz basımlarındaki benzersiz dizin sayesinde idempotenttir.
+
+**Alternatifler:** (1) Veriyi API üzerinden yüklemek: yaklaşık 1,4 milyon basım için saatler sürer ve bu ölçekte bir fayda sağlamaz. (2) Tek bir global rastgele akış: üretim sırası değiştiğinde (örneğin bir birim eklendiğinde) tüm veri değişir; canlı mod da geçmişle tutarlı olmaz. (3) Hazır SQL dökümü: tohumla değiştirilemez ve maaşları kendi anahtarıyla şifreleyemez.
+
+**Sonuçlar:** Yükleme yaklaşık 35 saniye sürüyor; soğuk başlangıç ile `make reset-demo` toplamda 1 dakikanın altında kalıyor. Simülatör iş kurallarını API dışında uyguladığı için, ürettiği verinin kurallara uyduğu testlerle doğrulanır: çakışma yok, bakiye eksiye düşmüyor, defter tutarlı, anomali oranları planlanan aralıkta. Bunun bedeli olarak simülatör, domain paketlerine derleme zamanında bağımlıdır.
+
+## ADR-014: `make verify` ayrı bir Go ikilisi; her çalıştırma kendi verisini oluşturur
+
+**Bağlam:** Ekip yöneticisi tüm özellikleri tek komutla denemeli. Komut tekrarlanabilir olmalı, sonunda bir PASS/FAIL tablosu basmalı ve 15 dakikayı aşmamalı.
+
+**Karar:** `cmd/verify`, API'ye yalnızca HTTP üzerinden ve demo hesaplarla konuşan bir program olarak yazıldı ve compose'un `verify` profilinde konteyner olarak çalışıyor. Her çalıştırma kendine ait çalışanlar oluşturuyor (`V<zaman>`, `W<zaman>`); izin, puantaj ve bordro senaryoları bu çalışanlar üzerinde yürüyor. Bordro iş akışı ise henüz kapanmamış ilk ayı kullanıyor.
+
+**Alternatifler:** (1) Kabuk betiği ile `curl`/`jq`: eşzamanlılık senaryoları ve tutar karşılaştırmaları kırılgan olur. (2) Her doğrulamadan önce veriyi sıfırlamak: daha basit olurdu ama birkaç dakika ekler ve "çalışan sistem üzerinde doğrulama" ruhuna aykırıdır. (3) Go entegrasyon testlerini yeniden kullanmak: onlar `httptest` üzerinde çalışır, Docker'daki gerçek yığını denemez.
+
+**Sonuçlar:** `make verify` yaklaşık 3 saniyede 17 kontrolü çalıştırıyor ve art arda çalıştırılabiliyor; iki ardışık çalıştırma 17/17 geçti. İkinci çalıştırma, gerçek bir eksiği ortaya çıkardı: dönem kapandıktan sonra girilen ve işe girişi o aya düşen çalışan. Bu eksik düzeltildi ve regresyon testi eklendi. Bilinen sınırlama: 2025–2026'daki 24 ay kapandıktan sonra `make reset-demo` gerekir.
