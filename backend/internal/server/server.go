@@ -94,6 +94,7 @@ func mountAPI(api chi.Router, d Deps) {
 		timesheet.NewHandler(timesheet.NewService(d.Pool)).Routes(p, idem)
 		payroll.NewHandler(payroll.NewService(d.Pool, d.Box), int(d.Config.DBMaxConns)-4, idem).Routes(p)
 		report.NewHandler(d.Pool).Routes(p)
+		p.Get("/system/status", statusHandler(d.Pool))
 	})
 }
 
