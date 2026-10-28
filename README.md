@@ -149,6 +149,49 @@ make testdb-up
 cd backend && go test -v -run 'TestEmployeeListScopes|TestEmployeeCardAccess|TestDelegation|TestConcurrentOverlapping|TestUnitMove|TestSalaryEncrypted' ./internal/server/
 ```
 
+## Yıllık İzin (F-2, T-1)
+
+| Uç nokta | İzin | Açıklama |
+|---|---|---|
+| `GET /api/v1/leave/employees/{id}/balance` | kapsam | Bakiye, bekleyen, kullanılabilir, devreden, son ve sonraki hakediş |
+| `GET /api/v1/leave/employees/{id}/ledger` | kapsam | Tüm hareketler ve yürüyen bakiye |
+| `GET /api/v1/leave/requests` | kapsam | `?status=&employee_id=&for_approval=true&limit=&cursor=` |
+| `GET /api/v1/leave/requests/{id}` | kapsam | |
+| `POST /api/v1/leave/requests` | kendisi / `leave.manage` | `{"leave_type":"annual","start_date","end_date","half_day":"morning"}` (`Idempotency-Key` destekli) |
+| `POST /api/v1/leave/requests/{id}/approve` | ekip yöneticisi, vekil, İK | Kendi talebini onaylayamaz |
+| `POST /api/v1/leave/requests/{id}/reject` | aynı | `{"note":"…"}` |
+| `POST /api/v1/leave/requests/{id}/cancel` | sahibi (bekleyen) / İK (onaylı dahil) | Onaylı izin iptalinde günler iade edilir |
+| `GET /api/v1/leave/holidays?year=` | herkes | |
+| `POST /api/v1/leave/holidays` | `leave.manage` | Dini bayram tarihleri açıklandıkça eklenir |
+
+**Hakediş kuralları** (4857 sayılı İş Kanunu md. 53, `internal/leave/engine.go`):
+
+| Kıdem (yıldönümünde tamamlanan yıl) | Gün |
+|---|---|
+| 1–5 yıl (5 dahil) | 14 |
+| 5'ten fazla, 15'ten az | 20 |
+| 15 ve üzeri | 26 |
+| 18 yaş ve altı ya da 50 yaş ve üstü | en az 20 |
+
+- Hakediş her işe giriş yıldönümünde doğar; yaş, yıldönümü günündeki yaştır. İşten çıkış tarihinden sonra hakediş doğmaz. 29 Şubat'ta işe girenlerin yıldönümü artık olmayan yıllarda 1 Mart'tır.
+- **Gün sayımı:** Pazartesi–Cuma çalışılır. Hafta sonu ve resmî tatiller izinden düşülmez. Arife ve 28 Ekim gibi yarım günlük tatillerde yalnızca sabah iş günüdür. Yarım gün izin sabah ya da öğleden sonra olabilir; arifenin öğleden sonrası zaten tatil olduğu için orada alınan yarım gün izin 0 gün tutar.
+- **Birim:** Tüm hesaplar tam sayı "yarım gün" ile yapılır (1 gün = 2). Ondalık sayı kullanılmaz.
+- **Devreden izin:** Kullanılmayan izin yanmaz (kanunen). Bakiye, eklemeli-yalnız `leave_ledger` tablosundaki hareketlerin toplamıdır. "Devreden" değeri, son hakedişten önceki bakiyedir.
+- **İzin sırasında rapor:** Onaylı yıllık izinle çakışan onaylı rapor günleri izinden sayılmaz ve bakiyeye iade edilir. Önce raporun mu yoksa iznin mi onaylandığı sonucu değiştirmez; iade, iznin düşülen gününden fazla olamaz. Onaylı bir rapor iptal edilemez, çünkü verilen iadeler ona bağlıdır.
+- **Eşzamanlılık:** Bakiyeyi değiştiren her işlem çalışanın `leave_accounts` satırını `SELECT … FOR UPDATE` ile kilitler. Kilit sırası her yolda aynıdır (önce talep, sonra hesap), bu yüzden kilitlenme oluşmaz. Ek olarak `CHECK (balance_half_days >= 0)` kısıtı vardır; kod hatalı olsa bile bakiye negatife düşemez.
+- **Hakedişler tembel işlenir:** Ayrı bir zamanlanmış görev yoktur. Bakiyeye dokunan her işlem, vadesi gelmiş yıldönümü hakedişlerini önce deftere yazar. Benzersiz dizin bu işlemi idempotent yapar.
+
+**Görev 1 kanıtı:**
+
+```bash
+make testdb-up
+cd backend
+go test -v ./internal/leave/                     # kurallar, takvim, demo bakiyeleri, rapor iadesi
+go test -v -run TestConcurrentApprovalsNeverOverdraw -count=10 ./internal/leave/
+```
+
+`TestConcurrentApprovalsNeverOverdraw`: 34 gün bakiyesi olan çalışanın 10'ar günlük 5 talebi aynı anda onaylanır. Tam olarak 3 talep onaylanır, 2'si `insufficient_balance` alır ve bakiye 4 günde kalır. Her testin sonunda tüm hesaplar için "bakiye = defter toplamı ve ≥ 0" koşulu kontrol edilir.
+
 ## Testler
 
 ```bash

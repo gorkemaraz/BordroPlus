@@ -81,3 +81,13 @@ Her kayıt: bağlam → karar → alternatifler → sonuçlar.
 **Alternatifler:** (1) Kapsamı JWT içine koymak: vekâlet ya da birim taşıma, token süresi dolana kadar (15 dakika) yansımaz. (2) Satırları Go'da süzmek: sayfalama bozulur ve fazla veri okunur. (3) PostgreSQL Row Level Security: güçlü bir seçenek, ancak bağlantı havuzunda her istek için oturum değişkeni ayarlamayı gerektirir ve hata ayıklamayı zorlaştırır.
 
 **Sonuçlar:** İstek başına bir ek sorgu (iki dizinli arama) maliyeti var. Kapsam kuralı tek bir yerde tanımlı (`org.Scope`) ve izin, puantaj gibi sonraki modüller de aynısını kullanacak. 403 ile 404'ün ayrılması kaydın var olup olmadığını ele verir; spec yetkisiz erişimde 403 istediği için bu bilinçli bir tercih.
+
+## ADR-009: İzin bakiyesi = kilitli hesap satırı + eklemeli-yalnız defter, tembel hakediş
+
+**Bağlam:** Aynı çalışanın iki izni eşzamanlı onaylandığında bakiye negatife düşmemeli. Devreden izin, hakediş ve iadeler açıklanabilir olmalı. Hakedişler yıldönümünde doğar ve bunun için bir zamanlanmış göreve bağımlı olmak istemiyoruz.
+
+**Karar:** Her hareket `leave_ledger` tablosuna yazılır: hakediş, kullanım, rapor iadesi, iptal ve düzeltme. Defter eklemeli-yalnızdır; güncelleme ve silme trigger ile reddedilir. Güncel bakiye `leave_accounts` satırında tutulur ve bakiyeyi değiştiren her işlem bu satırı önce `FOR UPDATE` ile kilitler. Satırdaki `CHECK (balance >= 0)` kodun yanılabileceği duruma karşı ikinci güvencedir. Vadesi gelmiş hakedişler, bakiyeye dokunan ilk işlemde deftere yazılır; benzersiz dizin aynı hakedişin iki kez yazılmasını engeller.
+
+**Alternatifler:** (1) Bakiyeyi her seferinde defterden toplamak ve `SERIALIZABLE` kullanmak: doğru olur, ancak yoğun onay anlarında yeniden deneme döngüsü gerekir ve hatalar daha az okunaklıdır. (2) Gece çalışan bir hakediş görevi: görev atlanırsa bakiye yanlış görünür ve geçmişe dönük düzeltme zorlaşır. (3) Tek bir bakiye sütunu, defter olmadan: "bu 34 gün nereden geldi?" sorusu cevapsız kalır.
+
+**Sonuçlar:** Her bakiye satır satır açıklanabilir; testler her seferinde "hesap bakiyesi = defter toplamı" koşulunu kontrol eder. Bakiye okuma işlemi de yazma yapar (hakediş yazımı); bu deterministik ve idempotent olduğu için kabul edildi. Bilinen sınırlama: onaylandıktan sonra eklenen bir resmî tatil, onaylı iznin düşülen gününü geriye dönük değiştirmez. Bekleyen talepler ise onay anında yeniden hesaplanır.
