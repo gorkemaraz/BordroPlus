@@ -483,6 +483,34 @@ Veri: simülatörün 1.500 çalışanı ve 1,4 milyon basımı. Ortam: yerel Doc
 
 **Ölçümün bulduğu darboğaz:** İlk koşuda verim yalnızca 155 istek/sn idi ve izin bakiyesinin p95 değeri 309 ms ile eşiği aşıyordu. Örnekleme sırasında API %50 CPU kullanırken veritabanı 16 çekirdeğin yaklaşık 15'ini tüketiyordu. Sebep panelin "bugünkü basım" sayımıydı: `WHERE punched_at >= bugün` filtresini `(employee_id, punched_at)` dizini karşılayamıyor, bu yüzden her istek 1,4 milyon satırı 3 paralel süreçle tarıyordu (98,9 ms). `time_punches (punched_at)` dizini eklendi (migrasyon 00010). Sorgu 0,29 ms'ye (index-only scan) indi, verim 22 kat arttı ve tüm gecikmeler yukarıdaki değerlere düştü.
 
+## Dayanıklılık ve Kaos Senaryosu
+
+```bash
+make chaos   # scripts/chaos.sh: veritabanını durdurur, geri açar, API'yi yeniden başlatır
+```
+
+| Adım | Beklenen | Ölçülen |
+|---|---|---|
+| 1a. Veritabanı durdurulur | `/health` hemen 503 (`degraded`) | 503, 2 ms |
+| 1b. Veritabanı yokken giriş | Asılı kalmadan `503 database_unavailable` + `Retry-After` | 503, ≈2,1 sn |
+| 1c. API süreci | Çökmez, yeniden başlamaz | restart sayısı 0 |
+| 2a. Veritabanı geri gelir | `/health` kendiliğinden 200 | < 1 sn |
+| 2b. Giriş ve veri | API yeniden başlatılmadan çalışır (havuz yeniden bağlanır) | 200 |
+| 3a–b. API yeniden başlatılır | nginx vekili (:3000) yeni konteyneri yeniden çözer, giriş çalışır | 200 |
+| 3c. Simülatör | Kesintiden sonra çalışmaya devam eder | çalışıyor |
+
+**Kaos testinin bulduğu sorun:** ilk koşuda veritabanı yokken giriş isteği **8 saniye** bekleyip 500 dönüyordu.
+- *Sebep:* Durdurulan konteynerin adı için Docker DNS'i "bulunamadı" demek yerine sorguyu zaman aşımına bırakıyor. Bağlantı kurma süresine ise bir sınır yoktu.
+- *Düzeltme:* `ConnectTimeout` (3 sn) ve DNS çözümlemesi için ayrı bir bağlam süresi (2 sn) eklendi.
+- *Yanıt kodu:* Bağlantı hataları artık genel 500 yerine `503 database_unavailable` ve `Retry-After: 5` döner. Bu geçici, tekrar denenebilir bir durumdur ve istemciye öyle bildirilir.
+
+Diğer dayanıklılık önlemleri:
+- her istek `HTTP_REQUEST_TIMEOUT` ile sınırlı bir bağlam taşır
+- düzgün kapanış (`SHUTDOWN_TIMEOUT`)
+- veritabanı açılışta üstel geri çekilmeyle beklenir
+- migrasyon ayrı bir servistir; hatalı bir migrasyon API'yi crash-loop'a sokmaz
+- servisler `restart: unless-stopped` ile çalışır
+
 ## Testler
 
 ```bash

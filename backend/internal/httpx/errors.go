@@ -7,6 +7,8 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 // Error is an API error carrying the HTTP status and a stable machine-readable code.
@@ -33,6 +35,7 @@ var (
 	ErrForbidden        = NewError(http.StatusForbidden, "forbidden", "bu işlem için yetkiniz yok")
 	ErrInternal         = NewError(http.StatusInternalServerError, "internal", "beklenmeyen bir hata oluştu")
 	ErrTimeout          = NewError(http.StatusServiceUnavailable, "timeout", "istek zaman aşımına uğradı")
+	ErrUnavailable      = NewError(http.StatusServiceUnavailable, "database_unavailable", "veritabanına şu anda ulaşılamıyor, lütfen tekrar deneyin")
 )
 
 // Validation builds a 422 error with per-field messages.
@@ -58,7 +61,15 @@ func WriteJSON(w http.ResponseWriter, status int, v any) {
 // and are logged; their text is never leaked to the client.
 func WriteError(w http.ResponseWriter, r *http.Request, err error) {
 	var apiErr *Error
-	if !errors.As(err, &apiErr) {
+	var connErr *pgconn.ConnectError
+	switch {
+	case errors.As(err, &apiErr):
+	case errors.As(err, &connErr):
+		// A dependency outage is temporary and retryable: 503, not 500.
+		slog.WarnContext(r.Context(), "database unavailable", "err", err, "path", r.URL.Path)
+		w.Header().Set("Retry-After", "5")
+		apiErr = ErrUnavailable
+	default:
 		slog.ErrorContext(r.Context(), "unhandled error", "err", err, "path", r.URL.Path)
 		apiErr = ErrInternal
 	}

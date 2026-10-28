@@ -3,6 +3,7 @@ package httpx
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -10,6 +11,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 func TestWriteErrorHidesUnknownErrors(t *testing.T) {
@@ -97,5 +100,14 @@ func TestObserveDoesNotLogHeaders(t *testing.T) {
 	}
 	if !strings.Contains(out, `"status":418`) {
 		t.Fatalf("status not logged: %s", out)
+	}
+}
+
+func TestWriteErrorDatabaseUnavailable(t *testing.T) {
+	rec := httptest.NewRecorder()
+	err := fmt.Errorf("login: %w", &pgconn.ConnectError{})
+	WriteError(rec, httptest.NewRequest(http.MethodPost, "/", nil), err)
+	if rec.Code != http.StatusServiceUnavailable || !strings.Contains(rec.Body.String(), "database_unavailable") || rec.Header().Get("Retry-After") == "" {
+		t.Fatalf("status %d body %s", rec.Code, rec.Body.String())
 	}
 }

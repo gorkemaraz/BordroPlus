@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -22,6 +23,17 @@ func Connect(ctx context.Context, url string, maxConns int32, timeout time.Durat
 	cfg.HealthCheckPeriod = 15 * time.Second
 	cfg.ConnConfig.RuntimeParams["application_name"] = "bordroplus"
 	cfg.ConnConfig.RuntimeParams["timezone"] = "Europe/Istanbul"
+	// Bound both halves of opening a connection. While the database
+	// container is stopped, Docker's DNS does not answer "no such host" but
+	// lets the lookup time out (8 s in the chaos run); ConnectTimeout only
+	// covers the TCP dial, so the lookup gets its own deadline. A request that
+	// needs a new connection then fails within seconds with 503.
+	cfg.ConnConfig.ConnectTimeout = 3 * time.Second
+	cfg.ConnConfig.LookupFunc = func(ctx context.Context, host string) ([]string, error) {
+		ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+		defer cancel()
+		return net.DefaultResolver.LookupHost(ctx, host)
+	}
 
 	pool, err := pgxpool.NewWithConfig(ctx, cfg)
 	if err != nil {
