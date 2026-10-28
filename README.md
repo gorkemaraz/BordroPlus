@@ -342,6 +342,40 @@ cd backend && go test -v -run 'Period|Rerun|PriorPeriod|1500' ./internal/payroll
 
 **Bilinen sınırlama:** geçmiş dönem farkı, ait olduğu ayın SGK bildirgesine (ek APHB) değil, ödendiği ayın bordrosuna yansıtılıyor. Bu, vergi açısından ödeme ayında vergilendirme pratiğiyle uyumludur; ancak SGK açısından basitleştirilmiş bir yaklaşımdır.
 
+## Avans, Borç ve Ek Ödemeler (F-5)
+
+| Uç nokta | İzin | Açıklama |
+|---|---|---|
+| `GET /api/v1/payroll/items?employee_id=&period=` | `payroll.items.manage` | |
+| `POST /api/v1/payroll/items` | `payroll.items.manage` | `{"employee_id","kind","label","amount":"9000.00","instalments":3,"start_period":"2026-01"}` (`Idempotency-Key` destekli) |
+| `POST /api/v1/payroll/items/{id}/cancel` | `payroll.items.manage` | |
+
+| Tür | Bordroya etkisi |
+|---|---|
+| `bonus` (ek ödeme, prim) | Brüte eklenir; SGK'ya ve gelir/damga vergisine tabidir |
+| `advance` (avans) | Muhasebe tarafından önceden ödenmiştir; başlangıç ayında netten tek seferde kesilir |
+| `loan` (borç) | 1–36 eşit aylık taksitle netten kesilir; kuruş farkı son taksite eklenir, taksitler toplamı her zaman tutara eşittir |
+
+- **Kesinti sınırı:** bir aylık kesinti taksiti, başlangıç ayındaki brüt maaşın dörtte birini aşamaz. Bu, İş Kanunu md. 35'teki oranın şirket politikası olarak uygulanmasıdır ve net ücretin eksiye düşmesini engeller. Aşan talep `422` alır; çözüm taksit sayısını artırmaktır.
+- **Donmuş dönem koruması:** taksit takvimi kontrol, onay ya da kapalı bir döneme değen kalem eklenemez ve iptal edilemez (`409 period_frozen`).
+- **Bordrodaki görünüm:** kalemler bordroda kendi satırlarıyla görünür, örneğin `Eğitim borcu (1/3)`.
+
+## Raporlar ve Bordro Çıktısı (F-7)
+
+| Uç nokta | İzin | Açıklama |
+|---|---|---|
+| `GET /api/v1/payroll/employees/{id}/payslips/{YYYY-MM}` | kendisi / `payroll.read.all` | Bordro belgesi; `?format=html` yazdırılabilir sayfa (tarayıcıdan PDF) |
+| `GET /api/v1/reports/payroll-summary?period=&level=&format=csv` | `reports.read` | Birim bazında kişi, brüt, kesintiler, net, işveren maliyeti ve toplam |
+| `GET /api/v1/reports/employer-cost?year=` | `reports.read` | Aylık brüt, net ve işveren maliyeti (bonus: maaş maliyet raporu) |
+| `GET /api/v1/reports/leave-usage?level=` | `reports.read` | Birim bazında hakedilen, kullanılan, iade edilen izin ve kalan bakiye |
+| `GET /api/v1/reports/overtime?month=&level=` | `reports.read` | Onaylı puantajlardan fazla mesai, hafta tatili ve tatil dakikaları; 270 saati aşanlar |
+
+- **Bordro belgesi:** çalışan kendi bordrosunu yalnızca dönem **onaylandıktan ya da kapandıktan** sonra görür; taslak kesin olmadığı için gösterilmez. Bordro uzmanı taslağı "KESİNLEŞMEMİŞ" işaretiyle görür. HTML çıktısında tüm değerler `html/template` ile kaçışlanır ve sıkı bir `Content-Security-Policy` başlığı gönderilir.
+- **Raporlarda bireysel maaş yok:** raporlar birim bazında toplam verir (`level` = organizasyon ağacında toplanacak derinlik). Bu yüzden maaşı açık görme izni olmayan denetçi ve muhasebe de raporları okuyabilir.
+- **CSV:** Türkçe yerel ayarlı tablolama programlarının doğrudan açabilmesi için `;` ayırıcı ve UTF-8 BOM kullanılır.
+- **İzin raporu:** hakedişler, tembel yazılan defterden okunmak yerine motorla hesaplanır; böylece rapor eksiksiz olur ve veritabanına hiçbir şey yazmaz.
+- **Bilinen sınırlama:** gerçek PDF üretimi (bonus) yapılmadı. Yazdırılabilir HTML sayfası, tarayıcının "PDF olarak kaydet" özelliğiyle aynı belgeyi üretir. Sunucu tarafında PDF için Türkçe karakter desteği olan bir fontun imaja gömülmesi gerekirdi.
+
 ## Testler
 
 ```bash
