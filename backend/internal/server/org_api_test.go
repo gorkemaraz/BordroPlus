@@ -256,6 +256,10 @@ func containsAny(list []any, s string) bool {
 func TestDelegationRules(t *testing.T) {
 	a := newDemoAPI(t)
 	today := time.Now().Format("2006-01-02")
+	// The server's "today" is the Europe/Istanbul date; the test clock may be
+	// UTC (behind by up to 3 h), so a delegation that must be valid ends a few
+	// days ahead rather than today, to clear the server's end-not-in-the-past check.
+	future := time.Now().AddDate(0, 0, 3).Format("2006-01-02")
 	body := func(mgr, delegate int64, start, end string) string {
 		m := ""
 		if mgr > 0 {
@@ -275,8 +279,8 @@ func TestDelegationRules(t *testing.T) {
 		{"self delegation", "yonetici", body(0, mgr, today, today), 422},
 		{"end before start", "yonetici", body(0, worker, "2030-01-10", "2030-01-01"), 422},
 		{"already over", "yonetici", body(0, worker, "2020-01-01", "2020-01-02"), 422},
-		{"hr for a non-manager", "ik", body(worker, hr, today, today), 422},
-		{"hr for the IT manager", "ik", body(mgr, hr, today, today), 201},
+		{"hr for a non-manager", "ik", body(worker, hr, today, future), 422},
+		{"hr for the IT manager", "ik", body(mgr, hr, today, future), 201},
 	}
 	for _, c := range cases {
 		if status, resp := a.call(http.MethodPost, "/delegations", a.token(c.user), c.body); status != c.status {
