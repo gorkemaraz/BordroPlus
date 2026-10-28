@@ -75,6 +75,9 @@ func (s *Service) Login(ctx context.Context, email, password string, meta Meta) 
 	if err != nil {
 		return Session{}, err
 	}
+	if p.TeamPaths, err = loadTeamPaths(ctx, s.pool, p.EmployeeID); err != nil {
+		return Session{}, err
+	}
 
 	ok, err := VerifyPassword(password, hash)
 	if err != nil {
@@ -248,7 +251,37 @@ func loadPrincipal(ctx context.Context, q db.Querier, userID int64) (Principal, 
 	if errors.Is(err, pgx.ErrNoRows) || (err == nil && !active) {
 		return Principal{}, ErrAccountInactive
 	}
+	if err != nil {
+		return Principal{}, err
+	}
+	p.TeamPaths, err = loadTeamPaths(ctx, q, p.EmployeeID)
 	return p, err
+}
+
+// loadTeamPaths returns the paths of units the employee manages, plus those
+// managed by anyone who delegated to them for today (Europe/Istanbul date,
+// the session time zone). Indexes: org_units_manager_idx and the
+// delegate GiST index.
+func loadTeamPaths(ctx context.Context, q db.Querier, employeeID *int64) ([]string, error) {
+	if employeeID == nil {
+		return []string{}, nil
+	}
+	rows, err := q.Query(ctx, `
+		SELECT path::text FROM org_units WHERE manager_id = $1
+		UNION
+		SELECT u.path::text
+		  FROM manager_delegations d
+		  JOIN org_units u ON u.manager_id = d.manager_employee_id
+		 WHERE d.delegate_employee_id = $1 AND d.revoked_at IS NULL AND d.valid_during @> current_date
+		ORDER BY 1`, *employeeID)
+	if err != nil {
+		return nil, err
+	}
+	paths, err := pgx.CollectRows(rows, pgx.RowTo[string])
+	if paths == nil {
+		paths = []string{}
+	}
+	return paths, err
 }
 
 func revokeFamily(ctx context.Context, tx pgx.Tx, family string) error {

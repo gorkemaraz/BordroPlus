@@ -131,7 +131,7 @@ type meView struct {
 	Permissions []Permission `json:"permissions"`
 }
 
-func newMeView(p Principal) meView { return meView{Principal: p, Permissions: p.Role.Permissions()} }
+func newMeView(p Principal) meView { return meView{Principal: p, Permissions: p.Permissions()} }
 
 func (h *Handler) login(w http.ResponseWriter, r *http.Request) error {
 	var req loginRequest

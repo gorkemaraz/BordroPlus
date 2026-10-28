@@ -54,6 +54,9 @@ const (
 	PermPayrollClose       Permission = "payroll.close"
 	PermPayrollItemsManage Permission = "payroll.items.manage"
 
+	PermDelegationManageSelf Permission = "delegation.manage.self"
+	PermDelegationManageAll  Permission = "delegation.manage.all"
+
 	PermReportsRead Permission = "reports.read"
 	PermAuditRead   Permission = "audit.read"
 	PermUsersManage Permission = "users.manage"
@@ -71,11 +74,11 @@ var rolePermissions = map[Role][]Permission{
 	RoleEmployee: selfService,
 	RoleManager: concat(selfService,
 		PermEmployeeReadTeam, PermLeaveReadTeam, PermLeaveApproveTeam,
-		PermTimesheetReadTeam, PermTimesheetApproveTeam),
+		PermTimesheetReadTeam, PermTimesheetApproveTeam, PermDelegationManageSelf),
 	RoleHR: concat(selfService,
 		PermEmployeeReadAll, PermEmployeeWrite, PermOrgWrite,
 		PermLeaveReadAll, PermLeaveManage, PermTimesheetReadAll, PermTimesheetManage,
-		PermSalaryRead, PermSalaryWrite, PermReportsRead, PermUsersManage),
+		PermSalaryRead, PermSalaryWrite, PermReportsRead, PermUsersManage, PermDelegationManageAll),
 	RolePayroll: concat(selfService,
 		PermEmployeeReadAll, PermLeaveReadAll, PermTimesheetReadAll,
 		PermSalaryRead, PermPayrollReadAll, PermPayrollCalculate, PermPayrollItemsManage, PermReportsRead),
@@ -84,6 +87,13 @@ var rolePermissions = map[Role][]Permission{
 	RoleAuditor: concat(selfService,
 		PermEmployeeReadAll, PermLeaveReadAll, PermTimesheetReadAll, PermPayrollReadAll,
 		PermReportsRead, PermAuditRead),
+}
+
+// teamPermissions are what a delegation hands over: acting on the manager's
+// sub-tree. Company-wide and self permissions are never delegated.
+var teamPermissions = map[Permission]struct{}{
+	PermEmployeeReadTeam: {}, PermLeaveReadTeam: {}, PermLeaveApproveTeam: {},
+	PermTimesheetReadTeam: {}, PermTimesheetApproveTeam: {},
 }
 
 var permissionSets = func() map[Role]map[Permission]struct{} {

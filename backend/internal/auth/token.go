@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"errors"
+	"slices"
 	"strconv"
 	"time"
 
@@ -19,10 +20,33 @@ type Principal struct {
 	Email      string `json:"email"`
 	Role       Role   `json:"role"`
 	EmployeeID *int64 `json:"employee_id"`
+	// TeamPaths are the org unit paths whose sub-trees the user may act on as
+	// a manager: units they manage plus units of managers who delegated to
+	// them today. Loaded per request, never taken from the token.
+	TeamPaths []string `json:"team_paths"`
 }
 
-// Can reports whether the principal's role grants p.
-func (p Principal) Can(perm Permission) bool { return p.Role.Can(perm) }
+// Can reports whether the principal may use perm. Team permissions are also
+// granted to an active delegate, whatever their role.
+func (p Principal) Can(perm Permission) bool {
+	if p.Role.Can(perm) {
+		return true
+	}
+	_, team := teamPermissions[perm]
+	return team && len(p.TeamPaths) > 0
+}
+
+// Permissions lists the effective permissions, including delegated ones.
+func (p Principal) Permissions() []Permission {
+	out := p.Role.Permissions()
+	if len(p.TeamPaths) > 0 {
+		for perm := range teamPermissions {
+			out = append(out, perm)
+		}
+	}
+	slices.Sort(out)
+	return slices.Compact(out)
+}
 
 type accessClaims struct {
 	Role Role `json:"role"`
