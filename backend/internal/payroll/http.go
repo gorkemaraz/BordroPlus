@@ -15,11 +15,25 @@ import (
 )
 
 // Handler serves /payroll.
-type Handler struct{ svc *Service }
+type Handler struct {
+	svc     *Service
+	workers int // parallel calculations in a period run
+}
 
-func NewHandler(svc *Service) *Handler { return &Handler{svc: svc} }
+func NewHandler(svc *Service, workers int) *Handler {
+	return &Handler{svc: svc, workers: max(1, workers)}
+}
 
 func (h *Handler) Routes(r chi.Router) {
+	need := auth.Require
+	r.With(need(auth.PermPayrollReadAll)).Get("/payroll/periods", httpx.Handle(h.listPeriods))
+	r.With(need(auth.PermPayrollReadAll)).Get("/payroll/periods/{period}", httpx.Handle(h.getPeriod))
+	r.With(need(auth.PermPayrollCalculate)).Post("/payroll/periods/{period}/run", httpx.Handle(h.run))
+	r.With(need(auth.PermPayrollCalculate)).Post("/payroll/periods/{period}/submit", h.transition("submit"))
+	r.With(need(auth.PermPayrollApprove)).Post("/payroll/periods/{period}/approve", h.transition("approve"))
+	r.With(need(auth.PermPayrollApprove)).Post("/payroll/periods/{period}/reject", h.transition("reject"))
+	r.With(need(auth.PermPayrollClose)).Post("/payroll/periods/{period}/close", h.transition("close"))
+
 	r.With(auth.Require(auth.PermPayrollReadAll)).Get("/payroll/rule-sets", httpx.Handle(h.ruleSets))
 	r.With(auth.Require(auth.PermPayrollCalculate)).Post("/payroll/employees/{id}/calculate", httpx.Handle(h.calculate))
 	r.With(auth.Require(auth.PermPayrollCalculate)).Post("/payroll/employees/{id}/recalculate", httpx.Handle(h.recalculate))
@@ -51,10 +65,89 @@ func mapErr(err error) error {
 		return httpx.NewError(http.StatusUnprocessableEntity, "not_employed", "çalışan bu dönemde çalışmıyor")
 	case errors.Is(err, ErrNoSalary):
 		return httpx.NewError(http.StatusUnprocessableEntity, "no_salary", "dönem için geçerli maaş kaydı yok")
+	case errors.Is(err, ErrPeriodFrozen):
+		return httpx.NewError(http.StatusConflict, "period_frozen", "bordro dönemi kontrol, onay ya da kapanış aşamasında; değiştirilemez")
+	case errors.Is(err, ErrInvalidTransition):
+		return httpx.NewError(http.StatusConflict, "invalid_transition", "dönem bu işlem için uygun durumda değil")
+	case errors.Is(err, ErrPreviousOpen):
+		return httpx.NewError(http.StatusConflict, "previous_period_open", "önceki bordro dönemi kapatılmadan bu dönem ilerletilemez")
+	case errors.Is(err, ErrNotRun):
+		return httpx.NewError(http.StatusConflict, "not_calculated", "dönem hatasız hesaplanmadan kontrole gönderilemez")
 	case errors.Is(err, pgx.ErrNoRows):
 		return httpx.ErrNotFound
 	}
 	return err
+}
+
+func actor(r *http.Request) Actor {
+	p, _ := auth.FromContext(r.Context())
+	return Actor{UserID: p.UserID, Role: string(p.Role), RequestID: httpx.RequestID(r.Context()), IP: httpx.ClientIP(r)}
+}
+
+func (h *Handler) listPeriods(w http.ResponseWriter, r *http.Request) error {
+	items, err := h.svc.ListPeriods(r.Context())
+	if err != nil {
+		return err
+	}
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{"items": items})
+	return nil
+}
+
+func (h *Handler) getPeriod(w http.ResponseWriter, r *http.Request) error {
+	period, err := parsePeriod("period", chi.URLParam(r, "period"))
+	if err != nil {
+		return err
+	}
+	p, err := h.svc.GetPeriod(r.Context(), period)
+	if err != nil {
+		return mapErr(err)
+	}
+	httpx.WriteJSON(w, http.StatusOK, p)
+	return nil
+}
+
+// run calculates the whole period in parallel and reports duration,
+// failures and the period digest.
+func (h *Handler) run(w http.ResponseWriter, r *http.Request) error {
+	period, err := parsePeriod("period", chi.URLParam(r, "period"))
+	if err != nil {
+		return err
+	}
+	rep, err := h.svc.RunPeriod(r.Context(), actor(r), period, h.workers)
+	if err != nil {
+		return mapErr(err)
+	}
+	httpx.WriteJSON(w, http.StatusOK, rep)
+	return nil
+}
+
+func (h *Handler) transition(action string) http.HandlerFunc {
+	return httpx.Handle(func(w http.ResponseWriter, r *http.Request) error {
+		period, err := parsePeriod("period", chi.URLParam(r, "period"))
+		if err != nil {
+			return err
+		}
+		var in struct {
+			Note string `json:"note"`
+		}
+		if r.ContentLength != 0 {
+			if err := httpx.DecodeJSON(w, r, &in); err != nil {
+				return err
+			}
+		}
+		if len([]rune(in.Note)) > 500 {
+			return httpx.Validation(map[string]string{"note": "en fazla 500 karakter"})
+		}
+		if action == "reject" && in.Note == "" {
+			return httpx.Validation(map[string]string{"note": "ret gerekçesi zorunlu"})
+		}
+		p, err := h.svc.Transition(r.Context(), actor(r), period, action, in.Note)
+		if err != nil {
+			return mapErr(err)
+		}
+		httpx.WriteJSON(w, http.StatusOK, p)
+		return nil
+	})
 }
 
 // canRead: payroll.read.all, or the employee's own payroll (payroll.read.self).

@@ -59,3 +59,50 @@ func TestPayrollPermissions(t *testing.T) {
 		t.Fatalf("bad period: %d", status)
 	}
 }
+
+// T-4 over HTTP: who may move a period, and the error codes.
+func TestPayrollPeriodWorkflowAPI(t *testing.T) {
+	a := newDemoAPI(t)
+	payroll, accounting, hr, auditor := a.token("bordro"), a.token("muhasebe"), a.token("ik"), a.token("denetci")
+
+	if status, _ := a.call(http.MethodPost, "/payroll/periods/2026-01/run", hr, ""); status != 403 {
+		t.Fatalf("HR running payroll: %d", status)
+	}
+	status, rep := a.call(http.MethodPost, "/payroll/periods/2026-01/run", payroll, "")
+	if status != 200 || rep["employees"] != 6.0 || len(rep["failures"].([]any)) != 0 || rep["digest"] == "" {
+		t.Fatalf("run: %d %v", status, rep)
+	}
+	if status, _ := a.call(http.MethodPost, "/payroll/periods/2026-01/approve", payroll, ""); status != 403 {
+		t.Fatalf("payroll approving: %d", status)
+	}
+	if status, body := a.call(http.MethodPost, "/payroll/periods/2026-01/approve", accounting, ""); status != 409 || errCode(body) != "invalid_transition" {
+		t.Fatalf("approving a draft: %d %v", status, body)
+	}
+	if status, _ := a.call(http.MethodPost, "/payroll/periods/2026-01/submit", payroll, ""); status != 200 {
+		t.Fatalf("submit: %d", status)
+	}
+	if status, body := a.call(http.MethodPost, "/payroll/employees/"+id(a.empID("D0001"))+"/calculate", payroll, `{"period":"2026-01"}`); status != 409 || errCode(body) != "period_frozen" {
+		t.Fatalf("calculate under review: %d %v", status, body)
+	}
+	if status, _ := a.call(http.MethodPost, "/payroll/periods/2026-01/reject", accounting, ""); status != 422 {
+		t.Fatalf("reject without a note: %d", status)
+	}
+	for _, step := range []string{"approve", "close"} {
+		if status, body := a.call(http.MethodPost, "/payroll/periods/2026-01/"+step, accounting, ""); status != 200 {
+			t.Fatalf("%s: %d %v", step, status, body)
+		}
+	}
+	status, p := a.call(http.MethodGet, "/payroll/periods/2026-01", auditor, "")
+	if status != 200 || p["status"] != "closed" || p["closed_at"] == nil {
+		t.Fatalf("auditor reads period: %d %v", status, p)
+	}
+	if status, body := a.call(http.MethodPost, "/payroll/periods/2026-01/run", payroll, ""); status != 409 || errCode(body) != "period_frozen" {
+		t.Fatalf("re-run closed period: %d %v", status, body)
+	}
+	if status, body := a.call(http.MethodPost, "/payroll/periods/2026-03/run", payroll, ""); status != 200 {
+		t.Fatalf("March with February never opened: %d %v", status, body)
+	}
+	if status, _ := a.call(http.MethodGet, "/payroll/periods", a.token("calisan"), ""); status != 403 {
+		t.Fatalf("employee listing periods: %d", status)
+	}
+}
