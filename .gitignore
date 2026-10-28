@@ -1,4 +1,5 @@
 *.test
+*.tsbuildinfo
 .env
 .idea/
 .vscode/

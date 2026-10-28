@@ -521,6 +521,19 @@ make testdb-down
 
 Veritabanı testleri sahte nesne (mock) kullanmaz. Her test, gerçek PostgreSQL üzerinde rastgele adlı yeni bir veritabanı açar, tüm migrasyonları uygular ve test bitince veritabanını siler. `TEST_DATABASE_URL` tanımlı değilse bu testler atlanır. CI'da GitHub Actions bir Postgres servisi başlatır ve testleri `-race` ile çalıştırır.
 
+**125 Go testi** (birim ve gerçek PostgreSQL üzerinde entegrasyon). Domain paketlerinin kapsamı (`-coverpkg` ile, paketin tüm testlerden aldığı kapsam):
+
+| Paket | Kapsam |
+|---|---:|
+| `auth` (parola, JWT, refresh rotation, RBAC) | %85,8 |
+| `leave` (hakediş motoru, defter, iş akışı) | %84,3 |
+| `timesheet` (eşleştirme, fazla mesai, öneriler) | %86,5 |
+| `payroll` (motor, girdiler, dönem iş akışı, kalemler) | %84,8 |
+| `org` (kapsam, personel, maaş, vekâlet) | %76,7 |
+| `money` / `secret` / `sim` / `report` | %97,1 / %88,1 / %89,3 / %81,0 |
+
+Bunlara ek olarak `make verify` (17 uçtan uca kontrol), `make e2e` (tarayıcı: 154 sayfa görünümü, izin akışı, iki sekme), `make load` (k6) ve `make chaos` vardır.
+
 Yarış durumu kanıtı: `TestConcurrentRefreshSingleWinner`. Aynı refresh token'ı 10 goroutine aynı anda kullanır; yalnızca biri başarılı olur ve token ailesi iptal edilir.
 
 ```bash
