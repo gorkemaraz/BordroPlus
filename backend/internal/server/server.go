@@ -21,6 +21,7 @@ import (
 	"bordroplus/internal/idempotency"
 	"bordroplus/internal/leave"
 	"bordroplus/internal/org"
+	"bordroplus/internal/payroll"
 	"bordroplus/internal/secret"
 	"bordroplus/internal/timesheet"
 )
@@ -90,6 +91,7 @@ func mountAPI(api chi.Router, d Deps) {
 		org.NewHandler(d.Pool, d.Box).Routes(p, idem)
 		leave.NewHandler(leave.NewService(d.Pool)).Routes(p, idem)
 		timesheet.NewHandler(timesheet.NewService(d.Pool)).Routes(p, idem)
+		payroll.NewHandler(payroll.NewService(d.Pool, d.Box)).Routes(p)
 	})
 }
 

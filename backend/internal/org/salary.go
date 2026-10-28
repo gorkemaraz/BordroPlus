@@ -10,9 +10,9 @@ import (
 	"bordroplus/internal/secret"
 )
 
-// salaryAAD binds a ciphertext to its row identity, so a ciphertext copied
+// SalaryAAD binds a ciphertext to its row identity, so a ciphertext copied
 // to another employee or date fails to decrypt.
-func salaryAAD(employeeID int64, validFrom time.Time) []byte {
+func SalaryAAD(employeeID int64, validFrom time.Time) []byte {
 	return []byte("employee_salaries:" + strconv.FormatInt(employeeID, 10) + ":" + validFrom.Format(dateLayout))
 }
 
@@ -22,7 +22,7 @@ var ErrSalaryExists = errConflict("salary_exists", "bu tarihte başlayan bir maa
 // InsertSalary encrypts and stores a monthly gross salary valid from
 // validFrom. actor is nil for system writes (seed, simulator).
 func InsertSalary(ctx context.Context, q db.Querier, box *secret.Box, actor *int64, employeeID int64, validFrom time.Time, amount money.Kurus) error {
-	enc, err := box.SealInt64(int64(amount), salaryAAD(employeeID, validFrom))
+	enc, err := box.SealInt64(int64(amount), SalaryAAD(employeeID, validFrom))
 	if err != nil {
 		return err
 	}

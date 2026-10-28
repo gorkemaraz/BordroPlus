@@ -374,7 +374,7 @@ func (h *Handler) listSalaries(w http.ResponseWriter, r *http.Request) error {
 		if err := rows.Scan(&from, &enc); err != nil {
 			return err
 		}
-		v, err := h.box.OpenInt64(enc, salaryAAD(id, from))
+		v, err := h.box.OpenInt64(enc, SalaryAAD(id, from))
 		if err != nil {
 			return err
 		}
@@ -399,7 +399,7 @@ func (h *Handler) currentSalary(ctx context.Context, id int64) (*SalaryRow, erro
 	if err != nil {
 		return nil, err
 	}
-	v, err := h.box.OpenInt64(enc, salaryAAD(id, from))
+	v, err := h.box.OpenInt64(enc, SalaryAAD(id, from))
 	if err != nil {
 		return nil, err
 	}

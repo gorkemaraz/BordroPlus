@@ -1,0 +1,61 @@
+package server
+
+import (
+	"net/http"
+	"testing"
+)
+
+func TestPayrollPermissions(t *testing.T) {
+	a := newDemoAPI(t)
+	payroll, worker, mgr := a.token("bordro"), a.token("calisan"), a.token("yonetici")
+	emp := id(a.empID("D0001"))
+
+	// Only payroll specialists calculate; HR and accounting cannot.
+	for _, user := range []string{"ik", "muhasebe", "yonetici", "calisan"} {
+		if status, _ := a.call(http.MethodPost, "/payroll/employees/"+emp+"/calculate", a.token(user), `{"period":"2026-01"}`); status != 403 {
+			t.Errorf("%s calculating payroll: %d", user, status)
+		}
+	}
+	status, res := a.call(http.MethodPost, "/payroll/employees/"+emp+"/calculate", payroll, `{"period":"2026-01"}`)
+	if status != 200 || res["net"] != "50931.18" || res["rule_version"] != "TR-2026.1" {
+		t.Fatalf("calculate: %d %v", status, res)
+	}
+
+	// The employee sees their own payslip, the manager does not see the team's.
+	if status, body := a.call(http.MethodGet, "/payroll/employees/"+emp+"/results/2026-01", worker, ""); status != 200 ||
+		body["result"].(map[string]any)["net"] != "50931.18" {
+		t.Fatalf("own payslip: %d %v", status, body)
+	}
+	if status, _ := a.call(http.MethodGet, "/payroll/employees/"+emp+"/results?year=2026", mgr, ""); status != 403 {
+		t.Fatalf("manager reading team payroll: %d", status)
+	}
+	if status, _ := a.call(http.MethodGet, "/payroll/employees/"+id(a.empID("D0003"))+"/results?year=2026", worker, ""); status != 403 {
+		t.Fatalf("employee reading colleague payroll: %d", status)
+	}
+	for _, user := range []string{"denetci", "muhasebe"} {
+		if status, body := a.call(http.MethodGet, "/payroll/employees/"+emp+"/results?year=2026", a.token(user), ""); status != 200 ||
+			len(body["items"].([]any)) != 1 {
+			t.Errorf("%s reading payroll: %d %v", user, status, body)
+		}
+	}
+
+	// Retroactive raise through the API.
+	if status, _ := a.call(http.MethodPost, "/employees/"+emp+"/salaries", a.token("ik"), `{"amount":"80000.00","valid_from":"2026-01-01"}`); status != 409 {
+		t.Fatalf("salary on an existing date must conflict: %d", status)
+	}
+	if status, _ := a.call(http.MethodPost, "/employees/"+emp+"/salaries", a.token("ik"), `{"amount":"80000.00","valid_from":"2026-01-15"}`); status != 201 {
+		t.Fatalf("add raise: %d", status)
+	}
+	status, body := a.call(http.MethodPost, "/payroll/employees/"+emp+"/recalculate", payroll, `{"from":"2026-01"}`)
+	changes, _ := body["changes"].([]any)
+	if status != 200 || len(changes) != 1 || changes[0].(map[string]any)["changed"] != true {
+		t.Fatalf("recalculate: %d %v", status, body)
+	}
+
+	if status, rs := a.call(http.MethodGet, "/payroll/rule-sets", payroll, ""); status != 200 || len(rs["items"].([]any)) != 2 {
+		t.Fatalf("rule sets: %d %v", status, rs)
+	}
+	if status, _ := a.call(http.MethodPost, "/payroll/employees/"+emp+"/calculate", payroll, `{"period":"2026/01"}`); status != 422 {
+		t.Fatalf("bad period: %d", status)
+	}
+}
