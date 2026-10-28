@@ -19,6 +19,7 @@ import (
 	"bordroplus/internal/config"
 	"bordroplus/internal/httpx"
 	"bordroplus/internal/idempotency"
+	"bordroplus/internal/leave"
 	"bordroplus/internal/org"
 	"bordroplus/internal/secret"
 )
@@ -84,7 +85,9 @@ func mountAPI(api chi.Router, d Deps) {
 	api.Group(func(p chi.Router) {
 		p.Use(authH.Authenticate)
 		p.With(auth.Require(auth.PermAuditRead)).Get("/audit-log", audit.ListHandler(d.Pool))
-		org.NewHandler(d.Pool, d.Box).Routes(p, idempotency.Middleware(d.Pool))
+		idem := idempotency.Middleware(d.Pool)
+		org.NewHandler(d.Pool, d.Box).Routes(p, idem)
+		leave.NewHandler(leave.NewService(d.Pool)).Routes(p, idem)
 	})
 }
 

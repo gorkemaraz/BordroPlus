@@ -52,17 +52,20 @@ type DemoAccount struct {
 	HireDate   string
 	Manages    string // org unit code this employee manages, if any
 	Salary     string // monthly gross from 2026-01-01, TRY
+	BirthDate  string
 }
 
-// DemoAccounts are fictional people, one per role. Hire dates differ so the
-// leave engine has different seniority bands to show.
+// DemoAccounts are fictional people, one per role. Hire and birth dates are
+// chosen so the leave engine has something to show: 14/20/26-day bands, the
+// 20-day floor for an 18-year-old (D0001's first year) and for a 50-year-old
+// (D0004's fourth year).
 var DemoAccounts = []DemoAccount{
-	{"calisan@" + DemoDomain, auth.RoleEmployee, "D0001", "Can", "Demir", "Yazılım Geliştirici", "yazilim", "2024-03-01", "", "65000.00"},
-	{"yonetici@" + DemoDomain, auth.RoleManager, "D0002", "Elif", "Kaya", "Bilgi Teknolojileri Müdürü", "bilgi_teknolojileri", "2016-09-15", "bilgi_teknolojileri", "140000.00"},
-	{"ik@" + DemoDomain, auth.RoleHR, "D0003", "Selin", "Arslan", "İK Uzmanı", "insan_kaynaklari", "2019-02-11", "", "85000.00"},
-	{"bordro@" + DemoDomain, auth.RolePayroll, "D0004", "Burak", "Şahin", "Bordro Uzmanı", "bordro", "2021-06-01", "", "80000.00"},
-	{"muhasebe@" + DemoDomain, auth.RoleAccounting, "D0005", "Deniz", "Aydın", "Muhasebe Uzmanı", "muhasebe", "2010-01-04", "", "90000.00"},
-	{"denetci@" + DemoDomain, auth.RoleAuditor, "D0006", "Ece", "Koç", "İç Denetçi", "ic_denetim", "2022-11-21", "", "95000.00"},
+	{"calisan@" + DemoDomain, auth.RoleEmployee, "D0001", "Can", "Demir", "Yazılım Geliştirici", "yazilim", "2024-03-01", "", "65000.00", "2006-09-01"},
+	{"yonetici@" + DemoDomain, auth.RoleManager, "D0002", "Elif", "Kaya", "Bilgi Teknolojileri Müdürü", "bilgi_teknolojileri", "2016-09-15", "bilgi_teknolojileri", "140000.00", "1985-04-12"},
+	{"ik@" + DemoDomain, auth.RoleHR, "D0003", "Selin", "Arslan", "İK Uzmanı", "insan_kaynaklari", "2019-02-11", "", "85000.00", "1990-11-30"},
+	{"bordro@" + DemoDomain, auth.RolePayroll, "D0004", "Burak", "Şahin", "Bordro Uzmanı", "bordro", "2021-06-01", "", "80000.00", "1975-05-20"},
+	{"muhasebe@" + DemoDomain, auth.RoleAccounting, "D0005", "Deniz", "Aydın", "Muhasebe Uzmanı", "muhasebe", "2010-01-04", "", "90000.00", "1972-08-08"},
+	{"denetci@" + DemoDomain, auth.RoleAuditor, "D0006", "Ece", "Koç", "İç Denetçi", "ic_denetim", "2022-11-21", "", "95000.00", "1994-03-03"},
 }
 
 // Demo inserts whatever demo data is missing, in one transaction. Existing
@@ -86,10 +89,11 @@ func Demo(ctx context.Context, pool *pgxpool.Pool, box *secret.Box, password str
 
 		for _, a := range DemoAccounts {
 			if _, err := tx.Exec(ctx, `
-				INSERT INTO employees (employee_no, first_name, last_name, title, org_unit_id, hire_date)
-				VALUES ($1, $2, $3, $4, (SELECT id FROM org_units WHERE code = $5), $6::date)
-				ON CONFLICT (employee_no) DO NOTHING`,
-				a.EmployeeNo, a.FirstName, a.LastName, a.Title, a.Unit, a.HireDate); err != nil {
+				INSERT INTO employees (employee_no, first_name, last_name, title, org_unit_id, hire_date, birth_date)
+				VALUES ($1, $2, $3, $4, (SELECT id FROM org_units WHERE code = $5), $6::date, $7::date)
+				ON CONFLICT (employee_no) DO UPDATE SET birth_date = EXCLUDED.birth_date
+				 WHERE employees.birth_date IS NULL`,
+				a.EmployeeNo, a.FirstName, a.LastName, a.Title, a.Unit, a.HireDate, a.BirthDate); err != nil {
 				return fmt.Errorf("seed employee %s: %w", a.EmployeeNo, err)
 			}
 			var empID int64

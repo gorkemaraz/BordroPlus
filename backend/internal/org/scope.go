@@ -4,7 +4,14 @@
 package org
 
 import (
+	"context"
+	"errors"
+
+	"github.com/jackc/pgx/v5"
+
 	"bordroplus/internal/auth"
+	"bordroplus/internal/db"
+	"bordroplus/internal/httpx"
 )
 
 // Scope is the set of employees a caller may see for one kind of data. It is
@@ -45,3 +52,37 @@ func (s Scope) Empty() bool { return !s.All && len(s.TeamPaths) == 0 && s.SelfID
 
 // Args returns the three SQL arguments for the WHERE fragment above.
 func (s Scope) Args() []any { return []any{s.All, s.TeamPaths, s.SelfID} }
+
+// CheckVisible returns nil when employee id is inside p's scope for family f,
+// httpx.ErrNotFound when it does not exist and httpx.ErrForbidden otherwise.
+func CheckVisible(ctx context.Context, q db.Querier, p auth.Principal, f Family, id int64) error {
+	var visible bool
+	args := append(ScopeFor(p, f).Args(), id)
+	err := q.QueryRow(ctx, `
+		SELECT `+ScopeSQL+` FROM employees e JOIN org_units u ON u.id = e.org_unit_id WHERE e.id = $4`, args...).Scan(&visible)
+	switch {
+	case errors.Is(err, pgx.ErrNoRows):
+		return httpx.ErrNotFound
+	case err != nil:
+		return err
+	case !visible:
+		return httpx.ErrForbidden
+	}
+	return nil
+}
+
+// InTeam reports whether the employee belongs to one of p's team sub-trees
+// (own units or delegated ones).
+func InTeam(ctx context.Context, q db.Querier, p auth.Principal, id int64) (bool, error) {
+	if len(p.TeamPaths) == 0 {
+		return false, nil
+	}
+	var in bool
+	err := q.QueryRow(ctx, `
+		SELECT u.path <@ ANY($1::ltree[]) FROM employees e JOIN org_units u ON u.id = e.org_unit_id WHERE e.id = $2`,
+		p.TeamPaths, id).Scan(&in)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, nil
+	}
+	return in, err
+}

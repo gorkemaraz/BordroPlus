@@ -46,8 +46,9 @@ const employeeCols = `
 	e.id, e.employee_no, e.first_name, e.last_name, e.title, e.org_unit_id, u.name, u.path::text,
 	to_char(e.hire_date, 'YYYY-MM-DD'), to_char(e.termination_date, 'YYYY-MM-DD')`
 
-// scopeSQL restricts rows to the caller's scope; args $1..$3 from Scope.Args.
-const scopeSQL = `($1::bool OR u.path <@ ANY($2::ltree[]) OR e.id = $3)`
+// ScopeSQL restricts rows to the caller's scope (aliases: e = employees,
+// u = org_units); args $1..$3 come from Scope.Args.
+const ScopeSQL = `($1::bool OR u.path <@ ANY($2::ltree[]) OR e.id = $3)`
 
 func scanEmployee(row pgx.Row) (Employee, error) {
 	var e Employee
@@ -88,7 +89,7 @@ func (h *Handler) listEmployees(w http.ResponseWriter, r *http.Request) error {
 		SELECT `+employeeCols+`
 		  FROM employees e
 		  JOIN org_units u ON u.id = e.org_unit_id
-		 WHERE `+scopeSQL+`
+		 WHERE `+ScopeSQL+`
 		   AND ($4::bigint IS NULL OR e.id > $4)
 		   AND ($5::bigint IS NULL OR u.path <@ (SELECT path FROM org_units WHERE id = $5))
 		   AND ($6 = '' OR e.employee_no = upper($6)
@@ -121,7 +122,7 @@ func (h *Handler) loadVisible(ctx context.Context, p auth.Principal, id int64) (
 	)
 	args := append(ScopeFor(p, EmployeeData).Args(), id)
 	err := h.pool.QueryRow(ctx, `
-		SELECT `+employeeCols+`, `+scopeSQL+`
+		SELECT `+employeeCols+`, `+ScopeSQL+`
 		  FROM employees e JOIN org_units u ON u.id = e.org_unit_id
 		 WHERE e.id = $4`, args...).
 		Scan(&e.ID, &e.EmployeeNo, &e.FirstName, &e.LastName, &e.Title, &e.OrgUnitID,
