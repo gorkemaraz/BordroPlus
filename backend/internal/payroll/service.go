@@ -337,6 +337,17 @@ func (s *Service) prevCumTaxBase(ctx context.Context, tx pgx.Tx, c *rules, emplo
 	if !errors.Is(err, pgx.ErrNoRows) {
 		return 0, err
 	}
+	// A frozen month without a result for this employee did not pay them
+	// (e.g. a hire entered after the close): it adds nothing to the chain,
+	// and its pay arrives as a prior-period correction instead.
+	var status string
+	err = tx.QueryRow(ctx, `SELECT status FROM payroll_periods WHERE period = $1`, prev).Scan(&status)
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return 0, err
+	}
+	if status == "review" || status == "approved" || status == "closed" {
+		return s.prevCumTaxBase(ctx, tx, c, employeeID, prev)
+	}
 	r, _, err := s.calculate(ctx, tx, c, employeeID, prev)
 	// A month before the first salary record was not run through this system
 	// (e.g. before go-live): the cumulative chain starts after it. Only the
@@ -384,6 +395,8 @@ func (s *Service) retroItems(ctx context.Context, tx pgx.Tx, c *rules, employeeI
 		                  AND r.start_date < c.period + interval '1 month' AND r.end_date >= c.period)
 		    OR EXISTS (SELECT 1 FROM timesheet_periods t
 		                WHERE t.employee_id = $1 AND t.month = c.period AND t.approved_at > c.closed_at)
+		    OR EXISTS (SELECT 1 FROM employees e
+		                WHERE e.id = $1 AND e.created_at > c.closed_at AND e.hire_date < c.period + interval '1 month')
 		 ORDER BY 1`, employeeID, period)
 	if err != nil {
 		return nil, err
@@ -394,28 +407,32 @@ func (s *Service) retroItems(ctx context.Context, tx pgx.Tx, c *rules, employeeI
 	}
 	var items []Item
 	for _, k := range months {
+		// A closed month without a stored result paid nothing (a hire entered
+		// after the close): everything due for it is a correction now.
 		var raw []byte
 		var paidElsewhere Kurus
 		err := tx.QueryRow(ctx, `
-			SELECT r.result, COALESCE((SELECT sum(a.amount) FROM payroll_adjustments a
-			                            WHERE a.employee_id = r.employee_id AND a.source_period = r.period
-			                              AND a.target_period <> $3), 0)
-			  FROM payroll_results r WHERE r.employee_id = $1 AND r.period = $2`, employeeID, k, period).Scan(&raw, &paidElsewhere)
-		if errors.Is(err, pgx.ErrNoRows) {
-			continue // the employee had no payroll that month
-		}
+			SELECT (SELECT r.result FROM payroll_results r WHERE r.employee_id = $1 AND r.period = $2),
+			       COALESCE((SELECT sum(a.amount) FROM payroll_adjustments a
+			                  WHERE a.employee_id = $1 AND a.source_period = $2 AND a.target_period <> $3), 0)`,
+			employeeID, k, period).Scan(&raw, &paidElsewhere)
 		if err != nil {
 			return nil, err
 		}
 		var stored Result
-		if err := json.Unmarshal(raw, &stored); err != nil {
-			return nil, err
+		if raw != nil {
+			if err := json.Unmarshal(raw, &stored); err != nil {
+				return nil, err
+			}
 		}
 		rs, err := c.get(ctx, tx, k)
 		if err != nil {
 			return nil, err
 		}
 		in, _, err := s.buildInput(ctx, tx, c, employeeID, k, 0)
+		if errors.Is(err, ErrNotEmployed) || errors.Is(err, ErrNoSalary) {
+			continue // nothing was due that month
+		}
 		if err != nil {
 			return nil, err
 		}

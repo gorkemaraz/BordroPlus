@@ -229,3 +229,41 @@ func TestRun1500EmployeesUnder10Seconds(t *testing.T) {
 	}
 	fmt.Printf("payroll run: %d employees in %s, re-run %d ms, digest %s\n", rep.Employees, elapsed.Round(time.Millisecond), again.DurationMS, rep.Digest[:16])
 }
+
+// A hire entered after January closed, with a January hire date: January's
+// payroll stays closed, February skips it in the cumulative chain and pays
+// January's salary as a prior-period correction.
+func TestBackdatedHireAfterClose(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	f.run(1)
+	f.closeMonth(1)
+
+	var late int64
+	if err := f.pool.QueryRow(ctx, `
+		INSERT INTO employees (employee_no, first_name, last_name, org_unit_id, hire_date)
+		VALUES ('L-1', 'Geç', 'Giriş', (SELECT id FROM org_units WHERE code = 'yazilim'), '2026-01-05') RETURNING id`).Scan(&late); err != nil {
+		t.Fatal(err)
+	}
+	if err := org.InsertSalary(ctx, f.pool, f.box, nil, late, month(1).AddDate(0, 0, 4), 6000000); err != nil {
+		t.Fatal(err)
+	}
+	rep := f.run(2)
+	if rep.Employees != 7 {
+		t.Fatalf("employees in February: %d", rep.Employees)
+	}
+	feb, _, err := f.svc.StoredResult(ctx, late, month(2))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 5-31 January: 27 days × 60.000 / 30 = 54.000.
+	var retro Kurus
+	for _, l := range feb.Lines {
+		if l.Code == "retro_2026-01" {
+			retro = l.Amount
+		}
+	}
+	if retro != 5400000 || feb.CumTaxBase != feb.TaxBase {
+		t.Fatalf("February of the late hire: retro %s, cum %s, base %s", retro, feb.CumTaxBase, feb.TaxBase)
+	}
+}
