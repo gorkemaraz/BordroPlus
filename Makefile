@@ -1,7 +1,7 @@
 # BordroPlus developer commands. Requires Docker (compose v2), Go and Node for local work.
 COMPOSE ?= docker compose
 
-.PHONY: help up down logs ps build test test-backend test-frontend lint cover clean testdb-up testdb-down verify reset-demo e2e load chaos
+.PHONY: help up down logs ps build test test-backend test-frontend lint cover clean testdb-up testdb-down verify reset-demo e2e load chaos security
 
 # Integration tests run against a throwaway Postgres (see testdb-up). Unset
 # TEST_DATABASE_URL to run unit tests only; DB tests are then skipped.
@@ -67,6 +67,9 @@ load: .env ## k6 load test (90 s, up to 50 users + logins) with p50/p95/p99 per 
 
 chaos: ## Stop the database and restart the API; show clean degradation and self-recovery
 	bash scripts/chaos.sh
+
+security: ## Black-box authorisation probe with curl (121 checks: 401/403, IDOR, token forgery, injection)
+	bash scripts/security-probe.sh
 
 reset-demo: .env ## Drop all data and start again from the initial seed (same simulator seed, same data)
 	$(COMPOSE) down -v --remove-orphans
