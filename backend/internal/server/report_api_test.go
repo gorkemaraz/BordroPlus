@@ -95,10 +95,20 @@ func TestReportsAPI(t *testing.T) {
 		t.Fatalf("units at level 2: %v", units)
 	}
 
+	// Rename a unit to a spreadsheet formula: the CSV must neutralise it
+	// (single-quote prefix) while the figures stay intact.
+	unit := id(a.unitID("insan_kaynaklari"))
+	if status, _ := a.call(http.MethodPatch, "/org/units/"+unit, a.token("ik"), `{"name":"=HYPERLINK(\"http://evil.example\",\"x\")"}`); status != 200 {
+		t.Fatalf("rename unit: %d", status)
+	}
+
 	resp, csv := get(t, a, "/reports/payroll-summary?period=2026-01&format=csv", auditor)
 	lines := strings.Split(strings.TrimSpace(csv), "\n")
 	if resp.StatusCode != 200 || !strings.Contains(lines[0], "Birim;Yol;Kişi;Brüt") || !strings.HasPrefix(lines[len(lines)-1], "Toplam;;6;") {
 		t.Fatalf("csv: %d\n%s", resp.StatusCode, csv)
+	}
+	if !strings.Contains(csv, "'=HYPERLINK") || strings.Contains(csv, ";=HYPERLINK") {
+		t.Fatalf("formula not neutralised in CSV:\n%s", csv)
 	}
 
 	status, cost := a.call(http.MethodGet, "/reports/employer-cost?year=2026", auditor, "")

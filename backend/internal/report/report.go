@@ -134,10 +134,16 @@ func (h *Handler) payrollSummary(w http.ResponseWriter, r *http.Request) error {
 		_, _ = w.Write([]byte("\xEF\xBB\xBF")) // BOM so spreadsheet tools read UTF-8
 		cw := csv.NewWriter(w)
 		cw.Comma = ';' // Turkish locale spreadsheets
-		_ = cw.Write([]string{"Birim", "Yol", "Kişi", "Brüt", "SGK işçi", "Gelir vergisi", "Damga vergisi", "Net", "SGK işveren", "İşveren maliyeti"})
+		row := func(cells ...string) {
+			for i := range cells {
+				cells[i] = csvSafe(cells[i])
+			}
+			_ = cw.Write(cells)
+		}
+		row("Birim", "Yol", "Kişi", "Brüt", "SGK işçi", "Gelir vergisi", "Damga vergisi", "Net", "SGK işveren", "İşveren maliyeti")
 		for _, p := range append(items, total) {
-			_ = cw.Write([]string{p.UnitName, p.UnitPath, strconv.Itoa(p.Headcount), p.Gross.String(), p.SGKEmployee.String(),
-				p.IncomeTax.String(), p.StampTax.String(), p.Net.String(), p.SGKEmployer.String(), p.EmployerCost.String()})
+			row(p.UnitName, p.UnitPath, strconv.Itoa(p.Headcount), p.Gross.String(), p.SGKEmployee.String(),
+				p.IncomeTax.String(), p.StampTax.String(), p.Net.String(), p.SGKEmployer.String(), p.EmployerCost.String())
 		}
 		cw.Flush()
 		return cw.Error()
@@ -346,6 +352,31 @@ func (h *Handler) overtime(w http.ResponseWriter, r *http.Request) error {
 	}
 	httpx.WriteJSON(w, http.StatusOK, map[string]any{"month": m.Format("2006-01"), "level": lv, "items": items, "over_annual_cap": over})
 	return nil
+}
+
+// csvSafe prevents CSV formula injection. A spreadsheet treats a cell that
+// begins with =, +, - or @ (or a leading tab/carriage return) as a formula,
+// so a unit name like "=HYPERLINK(...)" entered through the UI would run when
+// the exported report is opened. Such a cell is prefixed with a single quote,
+// which spreadsheets render as plain text. A genuine number (an optional sign
+// then a digit, like the amounts and counts) is left untouched so it stays
+// numeric.
+func csvSafe(s string) string {
+	if s == "" {
+		return s
+	}
+	switch s[0] {
+	case '=', '@', '+', '\t', '\r':
+		return "'" + s
+	case '-':
+		// A leading minus followed by a digit is a negative amount
+		// (Money.String never emits a leading +), not a formula like "-1+1".
+		if len(s) > 1 && s[1] >= '0' && s[1] <= '9' {
+			return s
+		}
+		return "'" + s
+	}
+	return s
 }
 
 func unitNames(r *http.Request, pool *pgxpool.Pool) (map[string]string, error) {
