@@ -22,6 +22,7 @@ import (
 	"bordroplus/internal/leave"
 	"bordroplus/internal/org"
 	"bordroplus/internal/secret"
+	"bordroplus/internal/timesheet"
 )
 
 // Pinger is the subset of the DB pool the health check needs.
@@ -88,6 +89,7 @@ func mountAPI(api chi.Router, d Deps) {
 		idem := idempotency.Middleware(d.Pool)
 		org.NewHandler(d.Pool, d.Box).Routes(p, idem)
 		leave.NewHandler(leave.NewService(d.Pool)).Routes(p, idem)
+		timesheet.NewHandler(timesheet.NewService(d.Pool)).Routes(p, idem)
 	})
 }
 

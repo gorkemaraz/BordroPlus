@@ -42,8 +42,8 @@ func (s *Service) Today() time.Time {
 	return time.Date(y, m, d, 0, 0, 0, 0, time.UTC)
 }
 
-// holidays loads public holidays in [from, to].
-func holidays(ctx context.Context, q db.Querier, from, to time.Time) (Holidays, error) {
+// LoadHolidays loads public holidays in [from, to].
+func LoadHolidays(ctx context.Context, q db.Querier, from, to time.Time) (Holidays, error) {
 	rows, err := q.Query(ctx, `SELECT holiday_date, half_day FROM public_holidays WHERE holiday_date BETWEEN $1 AND $2`, from, to)
 	if err != nil {
 		return nil, err
@@ -63,7 +63,7 @@ func holidays(ctx context.Context, q db.Querier, from, to time.Time) (Holidays, 
 
 // Cost computes the working-time cost of a range from the holiday table.
 func Cost(ctx context.Context, q db.Querier, start, end time.Time, half HalfDay) (int, error) {
-	h, err := holidays(ctx, q, start, end)
+	h, err := LoadHolidays(ctx, q, start, end)
 	if err != nil {
 		return 0, err
 	}
@@ -184,7 +184,7 @@ func applySickRefunds(ctx context.Context, tx pgx.Tx, employeeID int64, actor in
 	total := 0
 	refundedSoFar := map[int64]int{}
 	for _, p := range pairs {
-		h, err := holidays(ctx, tx, p.aStart, p.aEnd)
+		h, err := LoadHolidays(ctx, tx, p.aStart, p.aEnd)
 		if err != nil {
 			return 0, err
 		}
