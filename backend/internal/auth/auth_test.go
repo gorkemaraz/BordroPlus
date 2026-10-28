@@ -92,6 +92,10 @@ func TestAccessTokenRoundTrip(t *testing.T) {
 	if err != nil || id != 42 {
 		t.Fatalf("Verify = %d, %v", id, err)
 	}
+	// Two tokens for the same user in the same second still differ.
+	if s2, _ := tok.Issue(Principal{UserID: 42, Role: RoleHR}); s2 == s {
+		t.Fatal("tokens issued in the same second are identical")
+	}
 }
 
 func TestAccessTokenRejections(t *testing.T) {

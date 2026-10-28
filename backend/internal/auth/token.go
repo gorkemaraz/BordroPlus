@@ -70,9 +70,16 @@ func (t *Tokens) TTL() time.Duration { return t.ttl }
 // Issue signs an access token for p.
 func (t *Tokens) Issue(p Principal) (string, error) {
 	now := t.now()
+	// A random jti makes every token unique, even two issued in the same
+	// second for the same user (iat and exp have second resolution).
+	var jti [12]byte
+	if _, err := rand.Read(jti[:]); err != nil {
+		return "", err
+	}
 	claims := accessClaims{
 		Role: p.Role,
 		RegisteredClaims: jwt.RegisteredClaims{
+			ID:        base64.RawURLEncoding.EncodeToString(jti[:]),
 			Issuer:    issuer,
 			Subject:   strconv.FormatInt(p.UserID, 10),
 			IssuedAt:  jwt.NewNumericDate(now),
