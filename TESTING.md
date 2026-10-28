@@ -109,4 +109,33 @@ cd backend
 
 ## Arayüzde elle denenecek senaryolar
 
-Arayüz ekranları geliştirme aşamasındadır; bu bölüm ekranlar tamamlandığında doldurulacak. O zamana kadar API senaryoları için `requests.http` kullanılabilir.
+Arayüz: http://localhost:3000. Giriş ekranındaki "Demo hesapları" bölümü e-postayı doldurur.
+
+| # | Hesap | Adımlar | Beklenen |
+|---|---|---|---|
+| 1 | herhangi biri | Panel'i açık bırakın | "Sistem durumu" 10 sn'de bir yenilenir; "Bugünkü basım" ve simülatörün son çalışma saati ilerler (canlı) |
+| 2 | calisan | Menü | Yalnızca Panel, Organizasyon, İzinler, Puantaj, Bordrolarım görünür; adres çubuğuna `/payroll` yazınca "yetkiniz yok" |
+| 3 | calisan | İzinler → Yeni talep: gelecek bir hafta, sonra yarım gün (sabah) | İş günü sayısı gösterilir (hafta sonu/tatil düşülmez; yarım gün 0,5); "Kullanılabilir" bekleyen kadar azalır |
+| 4 | yonetici | İzinler → Onay bekleyenler → Onayla / Reddet (gerekçe zorunlu) | Talep kuyruktan düşer; çalışanın Hareketler (defter) tablosunda kullanım satırı |
+| 5 | yonetici | Kendi izin talebini oluşturup onaylamayı deneyin | Talep yöneticinin kuyruğunda görünmez; İK'nın kuyruğunda görünür |
+| 6 | yonetici | İzinler → Vekâlet: bugün için calisan'ı seçip vekâlet verin; calisan ile tekrar girin | calisan'ın üst çubuğunda "Vekil" etiketi, Personel menüsü ve ekip kuyruğu görünür; vekâlet iptal edilince kaybolur |
+| 7 | yonetici | Personel | Yalnızca Bilgi Teknolojileri alt ağacı (≈235 kişi); kartlarda maaş "maskeli"; Organizasyon'da kendi ağacı "Ekibim" ile işaretli |
+| 8 | ik | Personel → Yeni çalışan (maaşlı) → kartta "Maaş geçmişi"ne geçmiş tarihli yeni maaş | Kart açılır, maaş görünür; geçmiş tarihli maaş için bilgi notu |
+| 9 | yonetici | Puantaj → Ekip puantajı → bir simülatör çalışanı (ör. Gece Vardiyası) → önceki ay | Haftalık döküm, gece vardiyalarının iki güne bölünmüş dağılımı; tutarsız basımlar ve öneri saatleri |
+| 10 | yonetici | Puantaj → Düzeltme önerileri → Onayla / Reddet | Öneri kuyruktan düşer; ilgili ay tekrar açıldığında anomali sayısı azalır; anomali kalmayınca "Ayı onayla" etkinleşir |
+| 11 | calisan | Puantaj → Giriş bas / Çıkış bas | Sunucu saatiyle kayıt; Panel'deki "Bugünkü basım" artar |
+| 12 | bordro | Bordro → Dönem hesapla (ilk açık ay) | ≈1.300 çalışan, süre (ms), paralel işçi sayısı, dönem özeti; ikinci kez "0 değişti" ve aynı özet |
+| 13 | bordro → muhasebe | Kontrole gönder (bordro) → muhasebe ile Onayla / Reddet → Dönemi kapat | Butonlar yalnızca yetkili role görünür; kapalı dönemde hesap düğmeleri kaybolur |
+| 14 | bordro | Bordro → Çalışan bordrosu → çalışan seç → ay satırına tıkla → "Yazdır / PDF" | Satır satır formüllü bordro (SGK matrahı, kümülatif matrah, asgari ücret istisnası); yazdırılabilir sayfa |
+| 15 | bordro | Avans / borç / prim → 3 taksitli borç; aylık maaşın dörtte birini aşan avans | Taksit takvimi; aşan avansta hata mesajı |
+| 16 | calisan | Bordrolarım | Yalnızca onaylı/kapalı dönemler; taslak dönemler listelenmez |
+| 17 | muhasebe / denetci | Raporlar → Bordro özeti → CSV indir; İşveren maliyeti; İzin kullanımı; Fazla mesai | Birim toplamları (bireysel maaş yok); CSV Türkçe karakterlerle açılır |
+| 18 | denetci | Denetim kaydı → işlem: `payroll.close` | Kim, ne zaman, eski/yeni değer |
+| 19 | herhangi biri | Tarayıcıyı ~390 px genişliğe daraltın | Menü ☰ ile açılır; tablolar etiketli kartlara dönüşür; yatay kaydırma yok |
+| 20 | herhangi biri | İki sekmede aynı hesapla 15 dakikadan uzun kalın, sonra iki sekmede de işlem yapın | Oturum düşmez: refresh tek uçuşta yapılır ve sekmeler arasında paylaşılır |
+
+Bu senaryoların bir kısmı tarayıcıda otomatik de çalışır (Node gerekir):
+
+```bash
+make e2e   # her rol × her sayfa × masaüstü/telefon (154 görünüm) + izin akışı (talep → onay → İK iptali)
+```
