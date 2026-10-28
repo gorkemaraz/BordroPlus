@@ -1,0 +1,14 @@
+{
+  "name": "bordroplus-e2e",
+  "private": true,
+  "type": "module",
+  "description": "Browser tests against the running stack (docker compose up).",
+  "scripts": {
+    "smoke": "node smoke.mjs",
+    "flow": "node flow.mjs",
+    "test": "node smoke.mjs && node flow.mjs"
+  },
+  "dependencies": {
+    "playwright": "1.52.0"
+  }
+}
