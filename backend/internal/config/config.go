@@ -3,6 +3,7 @@
 package config
 
 import (
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"os"
@@ -33,6 +34,9 @@ type Config struct {
 	MaxFailedLogins int
 	LockoutDuration time.Duration
 
+	// SalaryKey is the base64 AES-256 key that encrypts salaries.
+	SalaryKey string
+
 	// Demo seed (run by the migrate command).
 	SeedDemo     bool
 	DemoPassword string
@@ -61,6 +65,7 @@ func Load() (Config, error) {
 		RefreshTokenTTL: dur("REFRESH_TOKEN_TTL", 7*24*time.Hour, &errs),
 		MaxFailedLogins: intVal("LOGIN_MAX_FAILURES", 5, &errs),
 		LockoutDuration: dur("LOGIN_LOCKOUT", 15*time.Minute, &errs),
+		SalaryKey:       os.Getenv("SALARY_ENCRYPTION_KEY"),
 		SeedDemo:        boolVal("SEED_DEMO", true, &errs),
 		DemoPassword:    os.Getenv("DEMO_PASSWORD"),
 	}
@@ -78,6 +83,9 @@ func Load() (Config, error) {
 	}
 	if c.AccessTokenTTL <= 0 || c.RefreshTokenTTL <= c.AccessTokenTTL {
 		errs = append(errs, errors.New("token TTLs must satisfy 0 < ACCESS_TOKEN_TTL < REFRESH_TOKEN_TTL"))
+	}
+	if k, err := base64.StdEncoding.DecodeString(c.SalaryKey); err != nil || len(k) != 32 {
+		errs = append(errs, errors.New("SALARY_ENCRYPTION_KEY must be 32 bytes, base64-encoded"))
 	}
 	if c.MaxFailedLogins < 1 {
 		errs = append(errs, errors.New("LOGIN_MAX_FAILURES must be >= 1"))

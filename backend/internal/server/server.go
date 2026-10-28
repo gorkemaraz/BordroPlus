@@ -18,6 +18,9 @@ import (
 	"bordroplus/internal/auth"
 	"bordroplus/internal/config"
 	"bordroplus/internal/httpx"
+	"bordroplus/internal/idempotency"
+	"bordroplus/internal/org"
+	"bordroplus/internal/secret"
 )
 
 // Pinger is the subset of the DB pool the health check needs.
@@ -33,6 +36,8 @@ type Deps struct {
 	// Pool backs the /api/v1 routes. When nil only the system endpoints are
 	// mounted, which lets their tests run without a database.
 	Pool *pgxpool.Pool
+	// Box encrypts and decrypts salaries.
+	Box *secret.Box
 }
 
 // New builds the root handler.
@@ -79,6 +84,7 @@ func mountAPI(api chi.Router, d Deps) {
 	api.Group(func(p chi.Router) {
 		p.Use(authH.Authenticate)
 		p.With(auth.Require(auth.PermAuditRead)).Get("/audit-log", audit.ListHandler(d.Pool))
+		org.NewHandler(d.Pool, d.Box).Routes(p, idempotency.Middleware(d.Pool))
 	})
 }
 

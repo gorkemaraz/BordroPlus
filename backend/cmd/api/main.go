@@ -18,6 +18,7 @@ import (
 	"bordroplus/internal/config"
 	"bordroplus/internal/db"
 	"bordroplus/internal/logging"
+	"bordroplus/internal/secret"
 	"bordroplus/internal/server"
 )
 
@@ -51,9 +52,14 @@ func run() error {
 	}
 	defer pool.Close()
 
+	box, err := secret.New(cfg.SalaryKey)
+	if err != nil {
+		return err
+	}
+
 	srv := &http.Server{
 		Addr:              cfg.HTTPAddr,
-		Handler:           server.New(server.Deps{Config: cfg, Log: log, DB: pool, Pool: pool, Version: version}),
+		Handler:           server.New(server.Deps{Config: cfg, Log: log, DB: pool, Pool: pool, Box: box, Version: version}),
 		ReadHeaderTimeout: cfg.ReadHeaderTimeout,
 		ReadTimeout:       cfg.RequestTimeout,
 		WriteTimeout:      cfg.RequestTimeout + 5*time.Second,

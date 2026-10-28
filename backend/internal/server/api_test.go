@@ -57,7 +57,7 @@ func newAPI(t *testing.T) *httptest.Server {
 			MaxFailedLogins: 5,
 			LockoutDuration: time.Minute,
 		},
-		Log: slog.New(slog.NewJSONHandler(io.Discard, nil)), DB: pool, Pool: pool, Version: "test",
+		Log: slog.New(slog.NewJSONHandler(io.Discard, nil)), DB: pool, Pool: pool, Box: testBox(t), Version: "test",
 	})
 	srv := httptest.NewServer(h)
 	t.Cleanup(srv.Close)

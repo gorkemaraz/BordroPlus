@@ -10,6 +10,7 @@ func setRequired(t *testing.T) {
 	t.Setenv("DATABASE_URL", "postgres://x")
 	t.Setenv("JWT_SECRET", strings.Repeat("s", MinJWTSecretLen))
 	t.Setenv("DEMO_PASSWORD", "Demo.12345")
+	t.Setenv("SALARY_ENCRYPTION_KEY", "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=")
 }
 
 func TestLoadDefaultsAndOverrides(t *testing.T) {
@@ -62,6 +63,7 @@ func TestLoadRejectsWeakAuthSettings(t *testing.T) {
 		"refresh <= access":   {"REFRESH_TOKEN_TTL", "1m"},
 		"short demo password": {"DEMO_PASSWORD", "123"},
 		"bad bool":            {"COOKIE_SECURE", "maybe"},
+		"short salary key":    {"SALARY_ENCRYPTION_KEY", "c2hvcnQ="},
 	}
 	for name, kv := range cases {
 		t.Run(name, func(t *testing.T) {

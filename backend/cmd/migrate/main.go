@@ -21,6 +21,7 @@ import (
 	"bordroplus/internal/config"
 	"bordroplus/internal/db"
 	"bordroplus/internal/logging"
+	"bordroplus/internal/secret"
 	"bordroplus/internal/seed"
 	"bordroplus/migrations"
 )
@@ -87,7 +88,11 @@ func run() error {
 	log.Info("migrations applied", "command", cmd, "version", v)
 
 	if cmd == "up" && cfg.SeedDemo {
-		n, err := seed.Demo(ctx, pool, cfg.DemoPassword)
+		box, err := secret.New(cfg.SalaryKey)
+		if err != nil {
+			return err
+		}
+		n, err := seed.Demo(ctx, pool, box, cfg.DemoPassword)
 		if err != nil {
 			return fmt.Errorf("seed demo: %w", err)
 		}

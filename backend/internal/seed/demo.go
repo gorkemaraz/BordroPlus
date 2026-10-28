@@ -6,6 +6,7 @@ package seed
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -13,7 +14,13 @@ import (
 	"bordroplus/internal/audit"
 	"bordroplus/internal/auth"
 	"bordroplus/internal/db"
+	"bordroplus/internal/money"
+	"bordroplus/internal/org"
+	"bordroplus/internal/secret"
 )
+
+// salaryFrom is when the demo salaries take effect.
+var salaryFrom = time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 
 // DemoDomain is the e-mail domain of the demo accounts. ".test" is reserved
 // (RFC 2606) so these addresses can never reach a real mailbox.
@@ -44,23 +51,24 @@ type DemoAccount struct {
 	Unit       string
 	HireDate   string
 	Manages    string // org unit code this employee manages, if any
+	Salary     string // monthly gross from 2026-01-01, TRY
 }
 
 // DemoAccounts are fictional people, one per role. Hire dates differ so the
 // leave engine has different seniority bands to show.
 var DemoAccounts = []DemoAccount{
-	{"calisan@" + DemoDomain, auth.RoleEmployee, "D0001", "Can", "Demir", "Yazılım Geliştirici", "yazilim", "2024-03-01", ""},
-	{"yonetici@" + DemoDomain, auth.RoleManager, "D0002", "Elif", "Kaya", "Bilgi Teknolojileri Müdürü", "bilgi_teknolojileri", "2016-09-15", "bilgi_teknolojileri"},
-	{"ik@" + DemoDomain, auth.RoleHR, "D0003", "Selin", "Arslan", "İK Uzmanı", "insan_kaynaklari", "2019-02-11", ""},
-	{"bordro@" + DemoDomain, auth.RolePayroll, "D0004", "Burak", "Şahin", "Bordro Uzmanı", "bordro", "2021-06-01", ""},
-	{"muhasebe@" + DemoDomain, auth.RoleAccounting, "D0005", "Deniz", "Aydın", "Muhasebe Uzmanı", "muhasebe", "2010-01-04", ""},
-	{"denetci@" + DemoDomain, auth.RoleAuditor, "D0006", "Ece", "Koç", "İç Denetçi", "ic_denetim", "2022-11-21", ""},
+	{"calisan@" + DemoDomain, auth.RoleEmployee, "D0001", "Can", "Demir", "Yazılım Geliştirici", "yazilim", "2024-03-01", "", "65000.00"},
+	{"yonetici@" + DemoDomain, auth.RoleManager, "D0002", "Elif", "Kaya", "Bilgi Teknolojileri Müdürü", "bilgi_teknolojileri", "2016-09-15", "bilgi_teknolojileri", "140000.00"},
+	{"ik@" + DemoDomain, auth.RoleHR, "D0003", "Selin", "Arslan", "İK Uzmanı", "insan_kaynaklari", "2019-02-11", "", "85000.00"},
+	{"bordro@" + DemoDomain, auth.RolePayroll, "D0004", "Burak", "Şahin", "Bordro Uzmanı", "bordro", "2021-06-01", "", "80000.00"},
+	{"muhasebe@" + DemoDomain, auth.RoleAccounting, "D0005", "Deniz", "Aydın", "Muhasebe Uzmanı", "muhasebe", "2010-01-04", "", "90000.00"},
+	{"denetci@" + DemoDomain, auth.RoleAuditor, "D0006", "Ece", "Koç", "İç Denetçi", "ic_denetim", "2022-11-21", "", "95000.00"},
 }
 
 // Demo inserts whatever demo data is missing, in one transaction. Existing
 // rows are left alone, so a changed demo password survives restarts.
 // It returns the number of accounts created.
-func Demo(ctx context.Context, pool *pgxpool.Pool, password string) (int, error) {
+func Demo(ctx context.Context, pool *pgxpool.Pool, box *secret.Box, password string) (int, error) {
 	hash, err := auth.HashPassword(password)
 	if err != nil {
 		return 0, err
@@ -92,6 +100,19 @@ func Demo(ctx context.Context, pool *pgxpool.Pool, password string) (int, error)
 				if _, err := tx.Exec(ctx, `UPDATE org_units SET manager_id = $1 WHERE code = $2 AND manager_id IS NULL`,
 					empID, a.Manages); err != nil {
 					return err
+				}
+			}
+			var hasSalary bool
+			if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM employee_salaries WHERE employee_id = $1)`, empID).Scan(&hasSalary); err != nil {
+				return err
+			}
+			if !hasSalary {
+				amount, err := money.Parse(a.Salary)
+				if err != nil {
+					return fmt.Errorf("seed salary %s: %w", a.EmployeeNo, err)
+				}
+				if err := org.InsertSalary(ctx, tx, box, nil, empID, salaryFrom, amount); err != nil {
+					return fmt.Errorf("seed salary %s: %w", a.EmployeeNo, err)
 				}
 			}
 			tag, err := tx.Exec(ctx, `

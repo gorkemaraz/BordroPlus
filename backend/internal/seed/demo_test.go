@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"bordroplus/internal/auth"
+	"bordroplus/internal/secret"
 	"bordroplus/internal/testdb"
 )
 
@@ -13,7 +14,7 @@ func TestDemoSeedIsIdempotentAndLoginable(t *testing.T) {
 	pool := testdb.New(t)
 	ctx := context.Background()
 
-	n, err := Demo(ctx, pool, "Demo.Parola.1")
+	n, err := Demo(ctx, pool, testBox(t), "Demo.Parola.1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -21,7 +22,7 @@ func TestDemoSeedIsIdempotentAndLoginable(t *testing.T) {
 		t.Fatalf("created %d accounts, want %d", n, len(auth.Roles))
 	}
 	// Second run (every compose start) changes nothing, even with a new password.
-	if n, err := Demo(ctx, pool, "Another.Password.2"); err != nil || n != 0 {
+	if n, err := Demo(ctx, pool, testBox(t), "Another.Password.2"); err != nil || n != 0 {
 		t.Fatalf("second run: created=%d err=%v", n, err)
 	}
 
@@ -53,9 +54,24 @@ func TestDemoSeedIsIdempotentAndLoginable(t *testing.T) {
 		t.Fatalf("demo employee not in manager's sub-tree: %v %v", inTeam, err)
 	}
 
+	var salaries int
+	_ = pool.QueryRow(ctx, `SELECT count(*) FROM employee_salaries`).Scan(&salaries)
+	if salaries != len(DemoAccounts) {
+		t.Fatalf("salaries = %d, want %d (and not duplicated by the second run)", salaries, len(DemoAccounts))
+	}
+
 	var audits int
 	_ = pool.QueryRow(ctx, `SELECT count(*) FROM audit_log WHERE action = 'seed.demo_accounts'`).Scan(&audits)
 	if audits != 1 {
 		t.Fatalf("seed audit rows = %d, want 1", audits)
 	}
+}
+
+func testBox(t *testing.T) *secret.Box {
+	t.Helper()
+	b, err := secret.New("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b
 }
