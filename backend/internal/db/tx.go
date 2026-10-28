@@ -40,3 +40,14 @@ func IsUniqueViolation(err error, constraint string) bool {
 	}
 	return constraint == "" || pgErr.ConstraintName == constraint
 }
+
+// PgCode returns the SQLSTATE of a PostgreSQL error, or "".
+// 23503 foreign_key_violation, 23505 unique_violation, 23514 check_violation,
+// 23P01 exclusion_violation.
+func PgCode(err error) string {
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) {
+		return pgErr.Code
+	}
+	return ""
+}
