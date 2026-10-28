@@ -1,0 +1,667 @@
+openapi: 3.1.0
+info:
+  title: BordroPlus API
+  version: "1.0"
+  description: |
+    İnsan kaynakları, izin, puantaj ve bordro sistemi.
+
+    - Kimlik: `POST /api/v1/auth/login` → `access_token` (Bearer, 15 dk). Refresh token `HttpOnly` cookie'dedir (`/api/v1/auth`).
+    - Hatalar her zaman `{"error":{"code","message","details"}}` biçimindedir. Kimlik yoksa 401, izin yoksa 403.
+    - Tutarlar ondalık metindir (`"45000.50"`, TL); tarih `YYYY-MM-DD`, dönem `YYYY-MM`, zaman RFC 3339.
+    - Listeler keyset sayfalamalıdır: `limit` + yanıttaki `next_cursor` → `cursor`.
+    - Durum değiştiren kritik POST'lar `Idempotency-Key` başlığını destekler: aynı anahtar ve gövde aynı yanıtı (`Idempotent-Replayed: true`) döndürür.
+    - Her uç noktanın gerektirdiği izin `x-permission` alanında yazılıdır; "kapsam" (`.self` / `.team` / `.all`) satırları sorguda süzer.
+servers:
+  - url: http://localhost:8080
+  - url: http://localhost:3000
+security:
+  - bearer: []
+
+tags:
+  - name: Sistem
+  - name: Kimlik
+  - name: Organizasyon ve personel
+  - name: İzin
+  - name: Puantaj
+  - name: Bordro
+  - name: Raporlar
+
+paths:
+  /health:
+    get:
+      tags: [Sistem]
+      summary: Sağlık (veritabanı bağlantısı dahil)
+      security: []
+      responses:
+        "200": { description: Sağlıklı, content: { application/json: { schema: { $ref: "#/components/schemas/Health" } } } }
+        "503": { description: Veritabanına ulaşılamıyor, content: { application/json: { schema: { $ref: "#/components/schemas/Health" } } } }
+  /metrics:
+    get:
+      tags: [Sistem]
+      summary: Prometheus metrikleri
+      security: []
+      responses:
+        "200": { description: Prometheus metin biçimi, content: { text/plain: { schema: { type: string } } } }
+  /api/v1/openapi.yaml:
+    get:
+      tags: [Sistem]
+      summary: Bu belge
+      security: []
+      responses:
+        "200": { description: OpenAPI 3.1, content: { application/yaml: { schema: { type: string } } } }
+  /api/v1/system/status:
+    get:
+      tags: [Sistem]
+      summary: Canlı sistem durumu (aktif çalışan, bugünkü basım, simülatör)
+      x-permission: kimliği doğrulanmış herkes
+      responses:
+        "200": { description: Durum, content: { application/json: { schema: { type: object } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /api/v1/audit-log:
+    get:
+      tags: [Sistem]
+      summary: Denetim kaydı (eklemeli-yalnız), en yeni önce
+      x-permission: audit.read
+      parameters:
+        - $ref: "#/components/parameters/limit"
+        - $ref: "#/components/parameters/cursor"
+        - { name: entity_type, in: query, schema: { type: string } }
+        - { name: entity_id, in: query, schema: { type: string } }
+        - { name: actor_user_id, in: query, schema: { type: integer } }
+        - { name: action, in: query, schema: { type: string }, example: payroll.close }
+      responses:
+        "200": { $ref: "#/components/responses/Page" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /api/v1/auth/login:
+    post:
+      tags: [Kimlik]
+      summary: Giriş; refresh token cookie olarak döner
+      security: []
+      requestBody:
+        required: true
+        content: { application/json: { schema: { type: object, required: [email, password], properties: { email: { type: string, format: email }, password: { type: string } } } } }
+      responses:
+        "200": { $ref: "#/components/responses/Session" }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { description: "Yanlış parola, bilinmeyen e-posta, kilitli ya da pasif hesap (hepsi aynı: invalid_credentials)", content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "422": { $ref: "#/components/responses/Validation" }
+  /api/v1/auth/refresh:
+    post:
+      tags: [Kimlik]
+      summary: Refresh token'ı döndürür (rotation); kullanılmış token tüm aileyi iptal eder
+      security: []
+      responses:
+        "200": { $ref: "#/components/responses/Session" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /api/v1/auth/logout:
+    post:
+      tags: [Kimlik]
+      summary: Refresh token ailesini iptal eder
+      security: []
+      responses:
+        "204": { description: Çıkış yapıldı }
+  /api/v1/auth/me:
+    get:
+      tags: [Kimlik]
+      summary: Oturumdaki kullanıcı, rolü, ekip yolları ve etkin izinleri
+      responses:
+        "200": { description: Kullanıcı, content: { application/json: { schema: { $ref: "#/components/schemas/Me" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /api/v1/org/units:
+    get:
+      tags: [Organizasyon ve personel]
+      summary: Organizasyon birimleri (ltree yolları)
+      x-permission: org.read
+      responses:
+        "200": { description: Birimler, content: { application/json: { schema: { type: object, properties: { items: { type: array, items: { $ref: "#/components/schemas/Unit" } } } } } } }
+        "403": { $ref: "#/components/responses/Forbidden" }
+    post:
+      tags: [Organizasyon ve personel]
+      summary: Birim ekle
+      x-permission: org.write
+      parameters: [{ $ref: "#/components/parameters/idempotencyKey" }]
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [parent_id, code, name], properties: { parent_id: { type: integer }, code: { type: string, pattern: "^[a-z][a-z0-9_]{0,62}$" }, name: { type: string }, manager_id: { type: integer } } } } } }
+      responses:
+        "201": { description: Oluşturuldu, content: { application/json: { schema: { $ref: "#/components/schemas/Unit" } } } }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "422": { $ref: "#/components/responses/Validation" }
+  /api/v1/org/units/{id}:
+    patch:
+      tags: [Organizasyon ve personel]
+      summary: Birimi yeniden adlandır, taşı (alt ağaç birlikte) ya da yöneticisini değiştir
+      x-permission: org.write
+      parameters: [{ $ref: "#/components/parameters/id" }]
+      requestBody: { required: true, content: { application/json: { schema: { type: object, properties: { parent_id: { type: integer }, code: { type: string }, name: { type: string }, manager_id: { type: integer } } } } } }
+      responses:
+        "200": { description: Güncellendi, content: { application/json: { schema: { $ref: "#/components/schemas/Unit" } } } }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "422": { description: Kendi alt ağacına taşıma ya da geçersiz alan, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+  /api/v1/employees:
+    get:
+      tags: [Organizasyon ve personel]
+      summary: Çalışanlar (kapsam süzülür)
+      x-permission: employee.read.self / .team / .all
+      parameters:
+        - $ref: "#/components/parameters/limit"
+        - $ref: "#/components/parameters/cursor"
+        - { name: q, in: query, schema: { type: string }, description: Ad, soyad ya da sicil no }
+        - { name: org_unit_id, in: query, schema: { type: integer }, description: Birim ve tüm alt ağacı }
+        - { name: include_terminated, in: query, schema: { type: boolean } }
+      responses:
+        "200": { $ref: "#/components/responses/Page" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+    post:
+      tags: [Organizasyon ve personel]
+      summary: Çalışan oluştur (isteğe bağlı ilk maaşla)
+      x-permission: employee.write (+ salary.write maaş için)
+      parameters: [{ $ref: "#/components/parameters/idempotencyKey" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [employee_no, first_name, last_name, org_unit_id, hire_date]
+              properties:
+                employee_no: { type: string, pattern: "^[A-Z0-9-]{3,20}$" }
+                first_name: { type: string }
+                last_name: { type: string }
+                title: { type: string }
+                org_unit_id: { type: integer }
+                hire_date: { type: string, format: date }
+                salary: { $ref: "#/components/schemas/SalaryRow" }
+      responses:
+        "201": { description: Oluşturuldu, content: { application/json: { schema: { $ref: "#/components/schemas/Employee" } } } }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "422": { $ref: "#/components/responses/Validation" }
+  /api/v1/employees/{id}:
+    get:
+      tags: [Organizasyon ve personel]
+      summary: Personel kartı; maaş yalnız salary.read ya da kendisi için, diğerlerine salary_masked
+      x-permission: kapsam
+      parameters: [{ $ref: "#/components/parameters/id" }]
+      responses:
+        "200": { description: Kart, content: { application/json: { schema: { $ref: "#/components/schemas/Employee" } } } }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    patch:
+      tags: [Organizasyon ve personel]
+      summary: Ad, unvan, birim (transfer), işten ayrılış
+      x-permission: employee.write
+      parameters: [{ $ref: "#/components/parameters/id" }]
+      requestBody: { required: true, content: { application/json: { schema: { type: object, properties: { first_name: { type: string }, last_name: { type: string }, title: { type: string }, org_unit_id: { type: integer }, termination_date: { type: string, format: date } } } } } }
+      responses:
+        "200": { description: Güncellendi, content: { application/json: { schema: { $ref: "#/components/schemas/Employee" } } } }
+        "422": { $ref: "#/components/responses/Validation" }
+  /api/v1/employees/{id}/salaries:
+    get:
+      tags: [Organizasyon ve personel]
+      summary: Maaş geçmişi (şifreli saklanır)
+      x-permission: salary.read ya da kendisi
+      parameters: [{ $ref: "#/components/parameters/id" }]
+      responses:
+        "200": { description: Geçmiş, content: { application/json: { schema: { type: object, properties: { items: { type: array, items: { $ref: "#/components/schemas/SalaryRow" } } } } } } }
+        "403": { $ref: "#/components/responses/Forbidden" }
+    post:
+      tags: [Organizasyon ve personel]
+      summary: Yeni maaş (geriye dönük olabilir; kapalı aylara düzeltme satırıyla yansır)
+      x-permission: salary.write
+      parameters: [{ $ref: "#/components/parameters/id" }, { $ref: "#/components/parameters/idempotencyKey" }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/SalaryRow" } } } }
+      responses:
+        "201": { description: Eklendi, content: { application/json: { schema: { $ref: "#/components/schemas/SalaryRow" } } } }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /api/v1/delegations:
+    get:
+      tags: [Organizasyon ve personel]
+      summary: Vekâletler (İK hepsi; diğerleri verdiği ya da aldığı)
+      parameters: [{ name: active, in: query, schema: { type: boolean } }]
+      responses:
+        "200": { description: Vekâletler, content: { application/json: { schema: { type: object } } } }
+    post:
+      tags: [Organizasyon ve personel]
+      summary: Vekâlet ver; çakışan vekâlet 409
+      x-permission: delegation.manage.self / .all
+      parameters: [{ $ref: "#/components/parameters/idempotencyKey" }]
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [delegate_employee_id, start_date, end_date], properties: { manager_employee_id: { type: integer }, delegate_employee_id: { type: integer }, start_date: { type: string, format: date }, end_date: { type: string, format: date }, reason: { type: string } } } } } }
+      responses:
+        "201": { description: Oluşturuldu, content: { application/json: { schema: { type: object } } } }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "422": { $ref: "#/components/responses/Validation" }
+  /api/v1/delegations/{id}/revoke:
+    post:
+      tags: [Organizasyon ve personel]
+      summary: Vekâleti hemen sonlandır
+      parameters: [{ $ref: "#/components/parameters/id" }]
+      responses:
+        "200": { description: İptal edildi, content: { application/json: { schema: { type: object } } } }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /api/v1/leave/holidays:
+    get:
+      tags: [İzin]
+      summary: Resmî tatiller
+      parameters: [{ name: year, in: query, schema: { type: integer } }]
+      responses: { "200": { description: Tatiller, content: { application/json: { schema: { type: object } } } } }
+    post:
+      tags: [İzin]
+      summary: Tatil ekle
+      x-permission: leave.manage
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [date, name], properties: { date: { type: string, format: date }, name: { type: string }, half_day: { type: boolean } } } } } }
+      responses:
+        "201": { description: Eklendi }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /api/v1/leave/employees/{id}/balance:
+    get:
+      tags: [İzin]
+      summary: Bakiye, bekleyen, kullanılabilir, devreden, son ve sonraki hakediş
+      x-permission: kapsam (leave)
+      parameters: [{ $ref: "#/components/parameters/id" }]
+      responses:
+        "200": { description: Bakiye, content: { application/json: { schema: { $ref: "#/components/schemas/Balance" } } } }
+        "403": { $ref: "#/components/responses/Forbidden" }
+  /api/v1/leave/employees/{id}/ledger:
+    get:
+      tags: [İzin]
+      summary: İzin defteri ve yürüyen bakiye
+      x-permission: kapsam (leave)
+      parameters: [{ $ref: "#/components/parameters/id" }]
+      responses: { "200": { description: Hareketler, content: { application/json: { schema: { type: object } } } } }
+  /api/v1/leave/requests:
+    get:
+      tags: [İzin]
+      summary: İzin talepleri (kapsam süzülür)
+      parameters:
+        - $ref: "#/components/parameters/limit"
+        - $ref: "#/components/parameters/cursor"
+        - { name: status, in: query, schema: { type: string, enum: [pending, approved, rejected, cancelled] } }
+        - { name: employee_id, in: query, schema: { type: integer } }
+        - { name: for_approval, in: query, schema: { type: boolean }, description: Çağıranın karar verebileceği bekleyenler }
+      responses: { "200": { $ref: "#/components/responses/Page" } }
+    post:
+      tags: [İzin]
+      summary: Talep oluştur (kendisi; İK herkes için ve geçmiş tarihli)
+      x-permission: leave.request.self / leave.manage
+      parameters: [{ $ref: "#/components/parameters/idempotencyKey" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [leave_type, start_date, end_date]
+              properties:
+                employee_id: { type: integer }
+                leave_type: { type: string, enum: [annual, sick, unpaid, excuse] }
+                start_date: { type: string, format: date }
+                end_date: { type: string, format: date }
+                half_day: { type: string, enum: ["", morning, afternoon] }
+                reason: { type: string }
+      responses:
+        "201": { description: Oluşturuldu, content: { application/json: { schema: { $ref: "#/components/schemas/LeaveRequest" } } } }
+        "409": { description: "insufficient_balance ya da leave_overlap", content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "422": { $ref: "#/components/responses/Validation" }
+  /api/v1/leave/requests/{id}:
+    get:
+      tags: [İzin]
+      summary: Talep
+      parameters: [{ $ref: "#/components/parameters/id" }]
+      responses: { "200": { description: Talep, content: { application/json: { schema: { $ref: "#/components/schemas/LeaveRequest" } } } } }
+  /api/v1/leave/requests/{id}/approve:
+    post:
+      tags: [İzin]
+      summary: Onayla (bakiye kilit altında düşülür; kendi talebi 403)
+      x-permission: leave.approve.team (alt ağaç, vekil dahil) / leave.manage
+      parameters: [{ $ref: "#/components/parameters/id" }, { $ref: "#/components/parameters/idempotencyKey" }]
+      requestBody: { content: { application/json: { schema: { $ref: "#/components/schemas/Note" } } } }
+      responses:
+        "200": { description: Onaylandı, content: { application/json: { schema: { $ref: "#/components/schemas/LeaveRequest" } } } }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /api/v1/leave/requests/{id}/reject:
+    post:
+      tags: [İzin]
+      summary: Reddet
+      parameters: [{ $ref: "#/components/parameters/id" }]
+      requestBody: { content: { application/json: { schema: { $ref: "#/components/schemas/Note" } } } }
+      responses: { "200": { description: Reddedildi }, "409": { $ref: "#/components/responses/Conflict" } }
+  /api/v1/leave/requests/{id}/cancel:
+    post:
+      tags: [İzin]
+      summary: İptal (sahibi bekleyeni; İK onaylıyı da, günler iade edilir)
+      parameters: [{ $ref: "#/components/parameters/id" }]
+      responses: { "200": { description: İptal edildi }, "409": { $ref: "#/components/responses/Conflict" } }
+
+  /api/v1/timesheet/punches:
+    post:
+      tags: [Puantaj]
+      summary: Basım aktarımı (hepsi ya da hiçbiri; cihaz tekrarları yok sayılır)
+      x-permission: timesheet.manage
+      parameters: [{ $ref: "#/components/parameters/idempotencyKey" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                punches:
+                  type: array
+                  maxItems: 5000
+                  items: { type: object, required: [employee_id, punched_at, direction], properties: { employee_id: { type: integer }, punched_at: { type: string, format: date-time }, direction: { type: string, enum: [in, out] }, device_id: { type: string } } }
+      responses:
+        "201": { description: "inserted / duplicates", content: { application/json: { schema: { type: object } } } }
+        "409": { description: period_locked, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "422": { $ref: "#/components/responses/Validation" }
+  /api/v1/timesheet/clock:
+    post:
+      tags: [Puantaj]
+      summary: Web saati (sunucu zamanı, kendisi)
+      requestBody: { required: true, content: { application/json: { schema: { type: object, properties: { direction: { type: string, enum: [in, out] } } } } } }
+      responses: { "201": { description: Kaydedildi } }
+  /api/v1/timesheet/employees/{id}/days:
+    get:
+      tags: [Puantaj]
+      summary: Günlük oturumlar, segmentler, anomaliler ve düzeltme önerileri (≤ 62 gün)
+      parameters:
+        - $ref: "#/components/parameters/id"
+        - { name: from, in: query, required: true, schema: { type: string, format: date } }
+        - { name: to, in: query, required: true, schema: { type: string, format: date } }
+      responses: { "200": { description: Günler, content: { application/json: { schema: { type: object } } } } }
+  /api/v1/timesheet/employees/{id}/months/{month}:
+    get:
+      tags: [Puantaj]
+      summary: Bordro ayı özeti (haftalık; Pazar'ın düştüğü ay), yıllık fazla mesai ve 270 saat uyarısı
+      parameters: [{ $ref: "#/components/parameters/id" }, { $ref: "#/components/parameters/month" }]
+      responses: { "200": { description: Özet, content: { application/json: { schema: { $ref: "#/components/schemas/MonthSummary" } } } } }
+  /api/v1/timesheet/employees/{id}/months/{month}/approve:
+    post:
+      tags: [Puantaj]
+      summary: Ayı onayla ve dondur (biten, anomalisiz ay)
+      x-permission: timesheet.approve.team / timesheet.manage
+      parameters: [{ $ref: "#/components/parameters/id" }, { $ref: "#/components/parameters/month" }]
+      responses:
+        "200": { description: Onaylandı, content: { application/json: { schema: { $ref: "#/components/schemas/MonthSummary" } } } }
+        "409": { description: "unresolved_anomalies, period_not_ended, period_locked", content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+  /api/v1/timesheet/corrections:
+    get:
+      tags: [Puantaj]
+      summary: Düzeltme önerileri
+      parameters:
+        - $ref: "#/components/parameters/limit"
+        - $ref: "#/components/parameters/cursor"
+        - { name: status, in: query, schema: { type: string, enum: [proposed, approved, rejected, obsolete, all] } }
+        - { name: employee_id, in: query, schema: { type: integer } }
+        - { name: for_approval, in: query, schema: { type: boolean } }
+      responses: { "200": { $ref: "#/components/responses/Page" } }
+  /api/v1/timesheet/corrections/{id}/approve:
+    post:
+      tags: [Puantaj]
+      summary: Öneriyi onayla ve uygula (eksik basımda saat düzeltilebilir, ±12 saat)
+      parameters: [{ $ref: "#/components/parameters/id" }]
+      requestBody: { content: { application/json: { schema: { type: object, properties: { at: { type: string, format: date-time }, note: { type: string } } } } } }
+      responses: { "200": { description: Uygulandı }, "409": { $ref: "#/components/responses/Conflict" } }
+  /api/v1/timesheet/corrections/{id}/reject:
+    post:
+      tags: [Puantaj]
+      summary: Öneriyi reddet
+      parameters: [{ $ref: "#/components/parameters/id" }]
+      responses: { "200": { description: Reddedildi } }
+
+  /api/v1/payroll/rule-sets:
+    get:
+      tags: [Bordro]
+      summary: Zaman geçerlilikli parametre setleri (oranlar 1/100000)
+      x-permission: payroll.read.all
+      responses: { "200": { description: Setler, content: { application/json: { schema: { type: object } } } } }
+  /api/v1/payroll/periods:
+    get:
+      tags: [Bordro]
+      summary: Bordro dönemleri
+      x-permission: payroll.read.all
+      responses: { "200": { description: Dönemler, content: { application/json: { schema: { type: object, properties: { items: { type: array, items: { $ref: "#/components/schemas/Period" } } } } } } } }
+  /api/v1/payroll/periods/{period}:
+    get:
+      tags: [Bordro]
+      summary: Dönem
+      x-permission: payroll.read.all
+      parameters: [{ $ref: "#/components/parameters/period" }]
+      responses: { "200": { description: Dönem, content: { application/json: { schema: { $ref: "#/components/schemas/Period" } } } } }
+  /api/v1/payroll/periods/{period}/run:
+    post:
+      tags: [Bordro]
+      summary: Taslak dönemi tüm çalışanlar için paralel hesapla
+      x-permission: payroll.calculate
+      parameters: [{ $ref: "#/components/parameters/period" }]
+      responses:
+        "200": { description: Rapor, content: { application/json: { schema: { $ref: "#/components/schemas/RunReport" } } } }
+        "409": { description: "period_frozen, previous_period_open", content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+  /api/v1/payroll/periods/{period}/submit:
+    post: { tags: [Bordro], summary: "taslak → kontrol", x-permission: payroll.calculate, parameters: [{ $ref: "#/components/parameters/period" }], responses: { "200": { $ref: "#/components/responses/PeriodOK" }, "409": { $ref: "#/components/responses/Conflict" } } }
+  /api/v1/payroll/periods/{period}/approve:
+    post: { tags: [Bordro], summary: "kontrol → onay (gönderen onaylayamaz)", x-permission: payroll.approve, parameters: [{ $ref: "#/components/parameters/period" }], responses: { "200": { $ref: "#/components/responses/PeriodOK" }, "409": { $ref: "#/components/responses/Conflict" } } }
+  /api/v1/payroll/periods/{period}/reject:
+    post: { tags: [Bordro], summary: "kontrol → taslak (not zorunlu)", x-permission: payroll.approve, parameters: [{ $ref: "#/components/parameters/period" }], requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/Note" } } } }, responses: { "200": { $ref: "#/components/responses/PeriodOK" }, "422": { $ref: "#/components/responses/Validation" } } }
+  /api/v1/payroll/periods/{period}/close:
+    post: { tags: [Bordro], summary: "onay → kapalı (kalıcı)", x-permission: payroll.close, parameters: [{ $ref: "#/components/parameters/period" }], responses: { "200": { $ref: "#/components/responses/PeriodOK" }, "409": { $ref: "#/components/responses/Conflict" } } }
+  /api/v1/payroll/employees/{id}/calculate:
+    post:
+      tags: [Bordro]
+      summary: Tek çalışanı bir ay için hesapla (taslak dönem)
+      x-permission: payroll.calculate
+      parameters: [{ $ref: "#/components/parameters/id" }]
+      requestBody: { required: true, content: { application/json: { schema: { type: object, properties: { period: { type: string, example: "2026-03" } } } } } }
+      responses:
+        "200": { description: Sonuç, content: { application/json: { schema: { $ref: "#/components/schemas/PayResult" } } } }
+        "409": { description: period_frozen, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "422": { description: "no_rule_set, not_employed, no_salary", content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+  /api/v1/payroll/employees/{id}/recalculate:
+    post:
+      tags: [Bordro]
+      summary: Bir aydan yılın son hesaplanan ayına kadar yeniden hesapla (geçmiş ay düzeltmesi)
+      x-permission: payroll.calculate
+      parameters: [{ $ref: "#/components/parameters/id" }]
+      requestBody: { required: true, content: { application/json: { schema: { type: object, properties: { from: { type: string, example: "2026-03" } } } } } }
+      responses: { "200": { description: Ay ay önce/sonra, content: { application/json: { schema: { type: object } } } } }
+  /api/v1/payroll/employees/{id}/results:
+    get:
+      tags: [Bordro]
+      summary: Yıllık sonuç özeti (çalışana yalnız onaylı/kapalı aylar)
+      x-permission: payroll.read.all ya da kendisi
+      parameters: [{ $ref: "#/components/parameters/id" }, { name: year, in: query, schema: { type: integer } }]
+      responses: { "200": { description: Özet, content: { application/json: { schema: { type: object } } } }, "403": { $ref: "#/components/responses/Forbidden" } }
+  /api/v1/payroll/employees/{id}/results/{period}:
+    get:
+      tags: [Bordro]
+      summary: Bir ayın satır satır açıklamalı sonucu ve girdileri
+      x-permission: payroll.read.all ya da kendisi (kesinleşmiş ay)
+      parameters: [{ $ref: "#/components/parameters/id" }, { $ref: "#/components/parameters/period" }]
+      responses: { "200": { description: Sonuç, content: { application/json: { schema: { type: object } } } }, "404": { $ref: "#/components/responses/NotFound" } }
+  /api/v1/payroll/employees/{id}/payslips/{period}:
+    get:
+      tags: [Bordro]
+      summary: Bordro belgesi; ?format=html yazdırılabilir sayfa
+      x-permission: payroll.read.all ya da kendisi (kesinleşmiş ay)
+      parameters:
+        - $ref: "#/components/parameters/id"
+        - $ref: "#/components/parameters/period"
+        - { name: format, in: query, schema: { type: string, enum: [json, html] } }
+      responses:
+        "200": { description: Bordro, content: { application/json: { schema: { type: object } }, text/html: { schema: { type: string } } } }
+        "404": { description: "payslip_not_final ya da kayıt yok", content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+  /api/v1/payroll/items:
+    get:
+      tags: [Bordro]
+      summary: Avans, borç ve ek ödeme kalemleri
+      x-permission: payroll.items.manage
+      parameters: [{ name: employee_id, in: query, schema: { type: integer } }, { name: period, in: query, schema: { type: string } }]
+      responses: { "200": { description: Kalemler, content: { application/json: { schema: { type: object } } } } }
+    post:
+      tags: [Bordro]
+      summary: Kalem ekle (aylık kesinti brüt maaşın 1/4'ünü aşamaz)
+      x-permission: payroll.items.manage
+      parameters: [{ $ref: "#/components/parameters/idempotencyKey" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [employee_id, kind, label, amount, start_period]
+              properties:
+                employee_id: { type: integer }
+                kind: { type: string, enum: [bonus, advance, loan] }
+                label: { type: string }
+                amount: { $ref: "#/components/schemas/Money" }
+                instalments: { type: integer, minimum: 1, maximum: 36 }
+                start_period: { type: string, example: "2026-11" }
+      responses:
+        "201": { description: Eklendi, content: { application/json: { schema: { type: object } } } }
+        "409": { description: period_frozen, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "422": { $ref: "#/components/responses/Validation" }
+  /api/v1/payroll/items/{id}/cancel:
+    post:
+      tags: [Bordro]
+      summary: Kalemi iptal et (dondurulmuş döneme değmiyorsa)
+      x-permission: payroll.items.manage
+      parameters: [{ $ref: "#/components/parameters/id" }]
+      responses: { "200": { description: İptal edildi }, "409": { $ref: "#/components/responses/Conflict" } }
+
+  /api/v1/reports/payroll-summary:
+    get:
+      tags: [Raporlar]
+      summary: Birim bazında bordro özeti; ?format=csv
+      x-permission: reports.read
+      parameters:
+        - { name: period, in: query, required: true, schema: { type: string, example: "2025-01" } }
+        - { name: level, in: query, schema: { type: integer, minimum: 1, maximum: 10, default: 2 } }
+        - { name: format, in: query, schema: { type: string, enum: [json, csv] } }
+      responses: { "200": { description: Özet, content: { application/json: { schema: { type: object } }, text/csv: { schema: { type: string } } } } }
+  /api/v1/reports/employer-cost:
+    get:
+      tags: [Raporlar]
+      summary: Aylık işveren maliyeti
+      x-permission: reports.read
+      parameters: [{ name: year, in: query, schema: { type: integer } }]
+      responses: { "200": { description: Maliyet, content: { application/json: { schema: { type: object } } } } }
+  /api/v1/reports/leave-usage:
+    get:
+      tags: [Raporlar]
+      summary: Birim bazında izin kullanımı
+      x-permission: reports.read
+      parameters: [{ name: level, in: query, schema: { type: integer } }]
+      responses: { "200": { description: Kullanım, content: { application/json: { schema: { type: object } } } } }
+  /api/v1/reports/overtime:
+    get:
+      tags: [Raporlar]
+      summary: Onaylı puantajlardan fazla mesai; 270 saati aşanlar
+      x-permission: reports.read
+      parameters: [{ name: month, in: query, required: true, schema: { type: string } }, { name: level, in: query, schema: { type: integer } }]
+      responses: { "200": { description: Fazla mesai, content: { application/json: { schema: { type: object } } } } }
+
+components:
+  securitySchemes:
+    bearer: { type: http, scheme: bearer, bearerFormat: JWT }
+  parameters:
+    id: { name: id, in: path, required: true, schema: { type: integer, minimum: 1 } }
+    period: { name: period, in: path, required: true, schema: { type: string, pattern: "^\\d{4}-\\d{2}$" }, example: "2026-03" }
+    month: { name: month, in: path, required: true, schema: { type: string, pattern: "^\\d{4}-\\d{2}$" }, example: "2025-11" }
+    limit: { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 200, default: 50 } }
+    cursor: { name: cursor, in: query, schema: { type: string }, description: Önceki yanıttaki next_cursor }
+    idempotencyKey: { name: Idempotency-Key, in: header, schema: { type: string, maxLength: 255 } }
+  responses:
+    Error: { description: Hata, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+    Unauthorized: { description: Kimlik doğrulama gerekli, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+    Forbidden: { description: Yetki yok, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+    NotFound: { description: Bulunamadı, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+    Conflict: { description: Durum çakışması, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+    Validation: { description: Girdi doğrulaması (details.fields), content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+    Page: { description: Keyset sayfası, content: { application/json: { schema: { $ref: "#/components/schemas/Page" } } } }
+    Session:
+      description: Oturum; Set-Cookie bp_refresh (HttpOnly, SameSite=Strict, Path=/api/v1/auth)
+      content: { application/json: { schema: { type: object, properties: { access_token: { type: string }, token_type: { type: string }, expires_in: { type: integer }, user: { $ref: "#/components/schemas/Me" } } } } }
+    PeriodOK: { description: Dönem, content: { application/json: { schema: { $ref: "#/components/schemas/Period" } } } }
+  schemas:
+    Money: { type: string, pattern: "^-?\\d+\\.\\d{2}$", example: "45000.50", description: TL, iki ondalık }
+    Error:
+      type: object
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code: { type: string, example: forbidden }
+            message: { type: string }
+            details: { type: object }
+    Page: { type: object, properties: { items: { type: array, items: { type: object } }, next_cursor: { type: string } } }
+    Health: { type: object, properties: { status: { type: string }, version: { type: string }, time: { type: string, format: date-time }, checks: { type: object } } }
+    Me:
+      type: object
+      properties:
+        id: { type: integer }
+        email: { type: string }
+        role: { type: string, enum: [employee, manager, hr, payroll, accounting, auditor] }
+        employee_id: { type: [integer, "null"] }
+        team_paths: { type: array, items: { type: string } }
+        permissions: { type: array, items: { type: string } }
+    Unit: { type: object, properties: { id: { type: integer }, parent_id: { type: [integer, "null"] }, code: { type: string }, name: { type: string }, path: { type: string }, depth: { type: integer }, manager_id: { type: [integer, "null"] }, manager_name: { type: [string, "null"] }, employee_count: { type: integer } } }
+    SalaryRow: { type: object, required: [amount, valid_from], properties: { amount: { $ref: "#/components/schemas/Money" }, valid_from: { type: string, format: date } } }
+    Employee:
+      type: object
+      properties:
+        id: { type: integer }
+        employee_no: { type: string }
+        first_name: { type: string }
+        last_name: { type: string }
+        title: { type: string }
+        org_unit_id: { type: integer }
+        org_unit_name: { type: string }
+        org_unit_path: { type: string }
+        hire_date: { type: string, format: date }
+        termination_date: { type: [string, "null"], format: date }
+        salary: { $ref: "#/components/schemas/SalaryRow" }
+        salary_masked: { type: boolean }
+    Balance:
+      type: object
+      properties:
+        balance: { type: number, description: Gün (0,5 adımlı) }
+        pending: { type: number }
+        available: { type: number }
+        carried_over: { type: number }
+        current_accrual: { type: number }
+        service_years: { type: integer }
+        next_accrual: { type: [object, "null"] }
+    LeaveRequest:
+      type: object
+      properties:
+        id: { type: integer }
+        employee_id: { type: integer }
+        leave_type: { type: string }
+        start_date: { type: string, format: date }
+        end_date: { type: string, format: date }
+        half_day: { type: string }
+        days: { type: number }
+        status: { type: string, enum: [pending, approved, rejected, cancelled] }
+    MonthSummary: { type: object, properties: { month: { type: string }, status: { type: string, enum: [open, approved] }, weeks: { type: array, items: { type: object } }, totals: { type: object }, open_anomalies: { type: integer }, year_overtime_minutes: { type: integer }, overtime_cap_exceeded: { type: boolean } } }
+    Period: { type: object, properties: { period: { type: string }, status: { type: string, enum: [draft, review, approved, closed] }, employee_count: { type: integer }, totals: { type: object }, digest: { type: string } } }
+    RunReport: { type: object, properties: { period: { type: string }, employees: { type: integer }, changed: { type: integer }, unchanged: { type: integer }, failures: { type: array, items: { type: object } }, duration_ms: { type: integer }, workers: { type: integer }, digest: { type: string } } }
+    PayResult:
+      type: object
+      properties:
+        rule_version: { type: string }
+        gross: { $ref: "#/components/schemas/Money" }
+        sgk_employee: { $ref: "#/components/schemas/Money" }
+        tax_base: { $ref: "#/components/schemas/Money" }
+        cum_tax_base: { $ref: "#/components/schemas/Money" }
+        income_tax: { $ref: "#/components/schemas/Money" }
+        stamp_tax: { $ref: "#/components/schemas/Money" }
+        net: { $ref: "#/components/schemas/Money" }
+        employer_cost: { $ref: "#/components/schemas/Money" }
+        lines: { type: array, items: { type: object, properties: { code: { type: string }, label: { type: string }, amount: { $ref: "#/components/schemas/Money" }, formula: { type: string } } } }
+    Note: { type: object, properties: { note: { type: string, maxLength: 500 } } }

@@ -14,6 +14,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus/collectors"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
+	"bordroplus/api"
 	"bordroplus/internal/audit"
 	"bordroplus/internal/auth"
 	"bordroplus/internal/config"
@@ -64,6 +65,10 @@ func New(d Deps) http.Handler {
 
 	r.Get("/health", healthHandler(d.DB, d.Version))
 	r.Handle("/metrics", promhttp.HandlerFor(reg, promhttp.HandlerOpts{Registry: reg}))
+	r.Get("/api/v1/openapi.yaml", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/yaml; charset=utf-8")
+		_, _ = w.Write(api.OpenAPI)
+	})
 
 	if d.Pool != nil {
 		r.Route("/api/v1", func(api chi.Router) { mountAPI(api, d) })
