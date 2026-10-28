@@ -15,6 +15,8 @@ cp .env.example .env
 docker compose up --build
 ```
 
+Boş Docker önbelleğiyle (taban imajlar silinmiş) ilk açılış ölçüldü: **96 sn**. Bu süreye imaj indirme, tüm derlemeler ve simülatörün 2 yıllık veriyi yüklemesi dahildir; tüm servisler `healthy` olana kadar sayılmıştır. Sonraki açılışlar birkaç saniye sürer.
+
 | Servis | Adres |
 |---|---|
 | Arayüz (React, nginx) | http://localhost:3000 |
